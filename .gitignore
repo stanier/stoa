@@ -1,0 +1,69 @@
+# Binaries
+bin/
+
+# Test binaries
+*.test
+
+# Output of go coverage
+*.out
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Root-level config files (may contain API keys)
+config.yaml
+.env
+
+# Service config files contain environment-specific URLs and settings.
+# Commit only the .example.yaml templates; keep live configs local.
+config/*.yaml
+# Ensure example templates are always committed.
+!config/*.example.yaml
+# permissions-default.yaml is a committed default policy (not environment-specific).
+!config/permissions-default.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Chat history (if we add persistence)
+*.chat
+history/
+
+# Build and runtime caches
+build-cache/
+cache/
+.build-cache/
+
+# Claude temporary directory
+.claude-tmp/
+.claude/
+
+# Claude Code sandbox placeholder files (empty read-only sentinels created by Claude's sandbox)
+HEAD
+refs
+objects
+hooks
+
+# Node
+node_modules/
+web/node_modules/
+
+# Docker
+data/
+*.log
+*.db
+traces/
+
+# Docker Compose override files
+docker-compose.override.yml
+docker-compose.*.yml
+!docker-compose.yml
