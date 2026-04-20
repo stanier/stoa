@@ -37,9 +37,6 @@ COPY --from=web-builder /dist ./internal/webd/dist
 FROM builder AS build-chat
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/chat ./cmd/chat
 
-FROM builder AS build-server
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/server ./cmd/server
-
 FROM builder AS build-dump-context
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/dump-context ./cmd/dump-context
 
@@ -78,6 +75,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/mcp-zul
 
 FROM builder AS build-mcp-trello
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/mcp-trello ./cmd/mcp-trello
+
+FROM builder AS build-mcp-knowledgebase
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/mcp-knowledgebase ./cmd/mcp-knowledgebase
 
 FROM builder AS build-mcp-acp
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/mcp-acp ./cmd/mcp-acp
@@ -128,13 +128,6 @@ RUN apk add --no-cache ca-certificates
 COPY --from=build-chat /app/chat /app/chat
 WORKDIR /app
 ENTRYPOINT ["/app/chat"]
-
-# Multi-channel server (headless daemon)
-FROM alpine:latest AS server
-RUN apk add --no-cache ca-certificates
-COPY --from=build-server /app/server /app/server
-WORKDIR /app
-ENTRYPOINT ["/app/server"]
 
 # Debug tool for context dumping
 FROM alpine:latest AS dump-context
@@ -256,6 +249,17 @@ USER mcp
 COPY --from=build-mcp-trello /app/mcp-trello /app/mcp-trello
 WORKDIR /app
 ENTRYPOINT ["/app/mcp-trello"]
+
+# MCP Knowledgebase Server (semantic + BM25 hybrid search over Markdown documents)
+FROM alpine:latest AS mcp-knowledgebase
+RUN apk add --no-cache ca-certificates && \
+    adduser -D -u 1000 mcp && \
+    mkdir -p /data && \
+    chown mcp:mcp /data
+USER mcp
+COPY --from=build-mcp-knowledgebase /app/mcp-knowledgebase /app/mcp-knowledgebase
+WORKDIR /app
+ENTRYPOINT ["/app/mcp-knowledgebase"]
 
 FROM alpine:latest AS mcp-acp
 RUN apk add --no-cache ca-certificates && \
