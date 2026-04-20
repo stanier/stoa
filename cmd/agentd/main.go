@@ -20,7 +20,6 @@ func main() {
 	port     := flag.String("port", defaultPort, "HTTP listen port")
 	logLevel := flag.String("log-level", "", "Log level: debug, info, warn, error")
 	logFile  := flag.String("log-file", "", "Log file path")
-	apiKey   := flag.String("api-key", "", "API key for Bearer token auth (env: AGENTD_API_KEY)")
 	tlsFlag  := flag.Bool("tls", false, "Enable TLS (auto-generates a self-signed cert if --cert/--key are not provided)")
 	certFile := flag.String("cert", "", "TLS certificate file (PEM)")
 	keyFile  := flag.String("key", "", "TLS private key file (PEM)")
@@ -40,8 +39,7 @@ func main() {
 		fmt.Println("  LLM_PROVIDER       - LLM provider: openai or anthropic")
 		fmt.Println("  OPENAI_API_KEY     - OpenAI API key")
 		fmt.Println("  ANTHROPIC_API_KEY  - Anthropic API key")
-		fmt.Println("  AGENTD_API_KEY     - agentd Bearer token (overridden by --api-key flag)")
-	fmt.Println("  AGENTD_AUTHD_URL   - authd base URL for token validation (e.g. http://authd:8888)")
+		fmt.Println("  AGENTD_AUTHD_URL   - authd base URL for token validation (e.g. http://authd:8888)")
 		os.Exit(0)
 	}
 
@@ -66,13 +64,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Resolve API key: flag takes precedence over env var.
-	key := *apiKey
-	if key == "" {
-		key = agentd.APIKeyFromEnv()
-	}
-	authdURL := os.Getenv("AGENTD_AUTHD_URL")
-	agentd.WarnIfNoAuth(key, cfg.Auth.Enabled, authdURL)
+	agentd.WarnIfNoAuth(os.Getenv("AGENTD_AUTHD_URL"))
 
 	// Resolve TLS cert/key paths.
 	if *tlsFlag && *certFile == "" {
@@ -94,7 +86,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	handler := agentd.AuthMiddlewareWithAPIKeyd(key, srv.AuthDB(), srv.AuthdClient(), srv.ApikeydClient(), srv.Router())
+	handler := agentd.AuthMiddlewareWithAPIKeyd(srv.AuthdClient(), srv.ApikeydClient(), srv.Router())
 	addr := ":" + *port
 	httpSrv := &http.Server{
 		Addr:    addr,

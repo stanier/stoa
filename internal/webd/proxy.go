@@ -14,11 +14,6 @@ import (
 	"github.com/stanier/stoa/internal/logging"
 )
 
-var upgrader = websocket.Upgrader{
-	// Allow all origins — auth is handled by the session cookie.
-	CheckOrigin: func(r *http.Request) bool { return true },
-}
-
 // handleWSProxy upgrades the browser connection to WebSocket and proxies
 // bidirectionally to agentd, injecting the session Bearer token.
 //
@@ -59,7 +54,7 @@ func (s *Server) handleWSProxy(w http.ResponseWriter, r *http.Request) {
 	defer agentConn.Close()
 
 	// Upgrade the browser connection.
-	browserConn, err := upgrader.Upgrade(w, r, nil)
+	browserConn, err := s.wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		logging.Errorf("webd: ws proxy: upgrade browser connection: %v", err)
 		return

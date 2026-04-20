@@ -9,6 +9,9 @@ import (
 	"embed"
 	"io/fs"
 	"net/http"
+	"strings"
+
+	"github.com/gorilla/websocket"
 )
 
 //go:embed all:dist
@@ -19,14 +22,24 @@ type Server struct {
 	cfg        *Config
 	mux        *http.ServeMux
 	httpClient *http.Client
+	wsUpgrader websocket.Upgrader
 }
 
 // NewServer constructs a fully-wired Server.
 func NewServer(cfg *Config) (*Server, error) {
+	allowedOrigin := strings.TrimRight(cfg.ExternalURL, "/")
 	s := &Server{
 		cfg:        cfg,
 		mux:        http.NewServeMux(),
 		httpClient: &http.Client{},
+		wsUpgrader: websocket.Upgrader{
+			// Only allow WebSocket upgrades from the configured external origin.
+			// Non-browser clients (e.g. TUI) send no Origin header and are allowed through.
+			CheckOrigin: func(r *http.Request) bool {
+				origin := strings.TrimRight(r.Header.Get("Origin"), "/")
+				return origin == "" || origin == allowedOrigin
+			},
+		},
 	}
 	s.registerRoutes()
 	return s, nil

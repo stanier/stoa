@@ -512,8 +512,9 @@ func (s *Server) handleRestoreMessages(w http.ResponseWriter, r *http.Request, s
 // handleStream upgrades the HTTP connection to a WebSocket for session streaming.
 // It uses golang.org/x/net/websocket which is already a project dependency.
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, sess *Session) {
+	token := bearerToken(r)
 	wsHandler := websocket.Handler(func(ws *websocket.Conn) {
-		s.serveWebSocket(ws, sess)
+		s.serveWebSocket(ws, sess, token)
 	})
 	wsHandler.ServeHTTP(w, r)
 }
@@ -542,14 +543,16 @@ func (w *wsWriter) send(ev agentproto.Event) {
 // serveWebSocket is the core WebSocket session handler.
 //
 // Goroutine layout:
-//  1. permForwarder goroutine – drains sess.permRequestChan and sess.permMentionChan,
+//  1. tokenRecheck goroutine – periodically re-validates the Bearer token against
+//     authd and closes the connection if the token has been revoked or expired.
+//  2. permForwarder goroutine – drains sess.permRequestChan and sess.permMentionChan,
 //     forwards events to the client via wsWriter.
-//  2. read loop (current goroutine) – processes ClientMessage JSON from the client.
+//  3. read loop (current goroutine) – processes ClientMessage JSON from the client.
 //     "send_message" messages trigger a new goroutine running the agentic loop.
 //     "perm_response" messages are delivered to sess.permPending channels.
 //
 // A semaphore (agentSem) ensures at most one agentic loop runs per session at a time.
-func (s *Server) serveWebSocket(ws *websocket.Conn, sess *Session) {
+func (s *Server) serveWebSocket(ws *websocket.Conn, sess *Session, token string) {
 	logging.Infof("agentd: WS connected for session %s", sess.id)
 	defer func() {
 		logging.Infof("agentd: WS disconnected for session %s", sess.id)
@@ -559,6 +562,27 @@ func (s *Server) serveWebSocket(ws *websocket.Conn, sess *Session) {
 	// done is closed when the read loop exits (connection closes).
 	done := make(chan struct{})
 	defer close(done)
+
+	// Periodically re-validate the token so that revoked sessions are closed
+	// promptly rather than running until the WebSocket is torn down naturally.
+	if s.authdClient != nil && token != "" {
+		go func() {
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-ticker.C:
+					if _, err := s.authdClient.Verify(context.Background(), token); err != nil {
+						logging.Infof("agentd: WS token revoked or expired for session %s, closing connection", sess.id)
+						ws.Close()
+						return
+					}
+				}
+			}
+		}()
+	}
 
 	writer := &wsWriter{ws: ws}
 	sendEvent := func(ev agentproto.Event) {

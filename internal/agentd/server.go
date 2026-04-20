@@ -13,7 +13,6 @@ import (
 	"github.com/stanier/stoa/internal/agents/personas"
 	"github.com/stanier/stoa/internal/app"
 	"github.com/stanier/stoa/internal/apikeydclient"
-	"github.com/stanier/stoa/internal/authdb"
 	"github.com/stanier/stoa/internal/authdclient"
 	"github.com/stanier/stoa/internal/config"
 	"github.com/stanier/stoa/internal/llm"
@@ -21,7 +20,6 @@ import (
 	"github.com/stanier/stoa/internal/llm/stats"
 	"github.com/stanier/stoa/internal/logging"
 	"github.com/stanier/stoa/internal/mcp"
-	"github.com/stanier/stoa/internal/oauth"
 	"github.com/stanier/stoa/internal/prompts"
 	"github.com/stanier/stoa/internal/ratelimit"
 	"github.com/stanier/stoa/internal/skills"
@@ -43,11 +41,9 @@ type Server struct {
 	mcpManager    *mcp.ServerManager   // may be nil if no MCP configured
 	agentSkills   []*agentskills.SkillMetadata
 
-	// Auth — at most one of authdClient or authDB will be non-nil.
+	// Auth — authdClient is set when AGENTD_AUTHD_URL is configured (production).
 	authdClient   *authdclient.Client
 	apikeydClient *apikeydclient.Client // validates external ACP caller keys (llmp_ prefix)
-	authDB        *authdb.DB
-	providers     []*oauth.Provider // legacy device flow
 
 	// loopHooks contains optional callbacks invoked during the agentic loop.
 	loopHooks LoopHooks
@@ -67,11 +63,6 @@ type Server struct {
 	// agentDB is optional Postgres persistence for sessions and messages.
 	// When nil, falls back to filesystem (AGENTD_SESSION_DIR).
 	agentDB *agentdb.DB
-
-	// deviceFlows stores in-progress Device Authorization flows keyed by
-	// a random polling token issued to the TUI. Entries are cleaned up on
-	// completion, expiry, or denial. sync.Map is safe for concurrent polls.
-	deviceFlows sync.Map // polling_token (string) → *deviceFlowEntry
 
 	sessions map[string]*Session
 	mu       sync.RWMutex
@@ -243,14 +234,10 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		}
 	}
 
-	// Auth setup — authd (preferred) or legacy embedded OAuth.
+	// Auth setup — delegates to authd when AGENTD_AUTHD_URL is set.
 	if authdURL := envOr("AGENTD_AUTHD_URL", ""); authdURL != "" {
 		s.authdClient = authdclient.New(authdURL)
 		logging.Infof("agentd: auth via authd at %s", authdURL)
-	} else if cfg != nil && cfg.Auth.Enabled {
-		if err := s.setupAuth(cfg); err != nil {
-			return nil, fmt.Errorf("agentd: auth setup: %w", err)
-		}
 	}
 
 	// apikeyd — validates external ACP caller keys (llmp_ prefix).
@@ -375,10 +362,6 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/tools", s.handleListTools)
 	mux.HandleFunc("/models", s.handleGetModels)
 	mux.HandleFunc("/metrics", s.handleMetrics)
-	// OAuth2 Device Authorization Grant endpoints (auth middleware exempts /auth/).
-	mux.HandleFunc("/auth/device", s.handleDeviceStart)
-	mux.HandleFunc("/auth/device/poll", s.handleDevicePoll)
-	mux.HandleFunc("/auth/logout", s.handleLogout)
 
 	// Agent registry CRUD.
 	mux.HandleFunc("/agents", s.handleAgents)
@@ -394,9 +377,6 @@ func (s *Server) Router() http.Handler {
 
 	return mux
 }
-
-// AuthDB returns the auth database, or nil when OAuth is disabled.
-func (s *Server) AuthDB() *authdb.DB { return s.authDB }
 
 // AuthdClient returns the authd client, or nil when not configured.
 func (s *Server) AuthdClient() *authdclient.Client { return s.authdClient }

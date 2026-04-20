@@ -94,7 +94,12 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleLogout clears the session cookie and redirects to the home page.
+// Requires POST to prevent logout CSRF via navigations (<a>, <img>, etc.).
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Path:     "/",

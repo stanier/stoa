@@ -19,7 +19,7 @@ type authdConfig struct {
 	SessionTTL time.Duration `yaml:"session_ttl"`
 
 	// ServiceTokenTTL controls how long service account tokens remain valid.
-	// Default: 8760h (1 year). Service tokens are rotated manually.
+	// Default: 720h (30 days). Rotate via auth-admin authd service create.
 	ServiceTokenTTL time.Duration `yaml:"service_token_ttl"`
 }
 
@@ -76,7 +76,7 @@ func loadConfig() (*authdConfig, error) {
 		cfg.SessionTTL = 24 * time.Hour
 	}
 	if cfg.ServiceTokenTTL == 0 {
-		cfg.ServiceTokenTTL = 8760 * time.Hour // 1 year
+		cfg.ServiceTokenTTL = 720 * time.Hour // 30 days
 	}
 
 	return &cfg, nil

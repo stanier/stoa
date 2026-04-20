@@ -11,11 +11,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/stanier/stoa/internal/authdb"
 	"github.com/stanier/stoa/internal/logging"
+	"github.com/stanier/stoa/internal/ratelimit"
 )
 
 // Config holds startup configuration passed in from main.
@@ -42,6 +44,7 @@ type Server struct {
 	mux                    *http.ServeMux
 	adminToken             string
 	allowedRedirectOrigins []string
+	verifyLimiter          *ratelimit.Limiter // rate-limits /token/verify by remote IP
 }
 
 // NewServer constructs, configures, and wires up a Server.
@@ -53,6 +56,15 @@ func NewServer(cfg Config) (*Server, error) {
 
 	allowedOrigins := parseAllowedOrigins(os.Getenv("AUTHD_ALLOWED_REDIRECT_ORIGINS"))
 
+	// AUTHD_VERIFY_RATE_LIMIT sets the max /token/verify calls per IP per minute.
+	// Default: 60. Set to 0 to disable.
+	verifyRateLimit := 60
+	if v := os.Getenv("AUTHD_VERIFY_RATE_LIMIT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			verifyRateLimit = n
+		}
+	}
+
 	s := &Server{
 		cfg:                    cfg,
 		fileCfg:                fileCfg,
@@ -62,6 +74,7 @@ func NewServer(cfg Config) (*Server, error) {
 		mux:                    http.NewServeMux(),
 		adminToken:             os.Getenv("AUTHD_ADMIN_TOKEN"),
 		allowedRedirectOrigins: allowedOrigins,
+		verifyLimiter:          ratelimit.New(time.Minute, verifyRateLimit),
 	}
 
 	// Connect to Postgres if configured.
@@ -518,6 +531,15 @@ func (s *Server) handleTokenVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Rate-limit by remote IP to slow token brute-forcing.
+	ip := remoteIP(r)
+	if ok, reason := s.verifyLimiter.Allow(ip); !ok {
+		logging.Warnf("authd: verify: rate limit exceeded for %s", ip)
+		w.Header().Set("Retry-After", "60")
+		http.Error(w, "rate limit exceeded: "+reason, http.StatusTooManyRequests)
+		return
+	}
+
 	raw := bearerToken(r)
 	if raw == "" {
 		w.Header().Set("Content-Type", "application/json")
@@ -531,8 +553,10 @@ func (s *Server) handleTokenVerify(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		if errors.Is(err, authdb.ErrExpired) {
+			logging.Warnf("authd: verify: expired token from %s", r.RemoteAddr)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "token expired"})
 		} else {
+			logging.Warnf("authd: verify: invalid token from %s", r.RemoteAddr)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid token"})
 		}
 		return
@@ -625,6 +649,7 @@ func (s *Server) handleTokenService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if bearerToken(r) != s.adminToken {
+		logging.Warnf("authd: service token: unauthorized attempt from %s", r.RemoteAddr)
 		w.Header().Set("WWW-Authenticate", `Bearer realm="authd"`)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -663,7 +688,7 @@ func (s *Server) handleTokenService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logging.Infof("authd: issued service token for %q (TTL %s)", req.ServiceID, ttl)
+	logging.Infof("authd: issued service token for %q (TTL %s) requested from %s", req.ServiceID, ttl, r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"session_token": rawToken})
@@ -717,4 +742,21 @@ func bearerToken(r *http.Request) string {
 		return strings.TrimSpace(after)
 	}
 	return ""
+}
+
+// remoteIP returns the best-effort client IP for rate limiting.
+// Prefers X-Forwarded-For (set by reverse proxies) over RemoteAddr.
+func remoteIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// X-Forwarded-For may be "client, proxy1, proxy2"; take the first.
+		if idx := strings.Index(xff, ","); idx >= 0 {
+			return strings.TrimSpace(xff[:idx])
+		}
+		return strings.TrimSpace(xff)
+	}
+	// Strip the port from RemoteAddr ("1.2.3.4:5678" → "1.2.3.4").
+	if idx := strings.LastIndex(r.RemoteAddr, ":"); idx >= 0 {
+		return r.RemoteAddr[:idx]
+	}
+	return r.RemoteAddr
 }
