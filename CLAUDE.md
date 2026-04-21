@@ -10,7 +10,6 @@ make build              # Build all binaries
 make build-chat         # Build TUI client
 make build-agentd       # Build agent daemon
 make build-zulip-bridge # Build Zulip bridge
-make build-server       # Build legacy multi-channel server
 make build-mcp-all      # Build all MCP server binaries
 
 # Standalone mode (TUI with embedded LLM — original mode)
@@ -236,6 +235,20 @@ auth-admin idp user create --username U --email E --password P
 auth-admin idp user reset-password --username U --password P
 auth-admin idp user unlock --username U
 auth-admin idp user delete --username U
+```
+
+**Running auth-admin via compose** (recommended — correct DB URL and network are already wired):
+```bash
+# Create the first local-idp user (substitute migrate-authd/migrate-agentd for authd/agentd commands)
+podman compose run --rm migrate-localidp idp user create \
+  --username yourname --email you@example.com --password yourpassword
+
+# Other idp user ops
+podman compose run --rm migrate-localidp idp user list
+podman compose run --rm migrate-localidp idp user reset-password --username U --password P
+
+# authd service token (e.g. for a bridge)
+podman compose run --rm migrate-authd authd service create zulip-bridge
 ```
 
 **TUI remote mode**: Set `AGENT_ADDRESS=http://host:port` (or `agent.address` in config). If set and no LLM key, TUI skips LLM validation and connects to agentd.

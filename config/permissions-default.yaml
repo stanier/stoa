@@ -1,0 +1,204 @@
+# Default MCP Tool Permissions Policy
+#
+# This file defines permission ranks for MCP server tools.
+# Copy to ~/.config/stoa/permissions.yaml to customize.
+#
+# Permission Ranks:
+#   0 - Silent: Execute without notification
+#   1 - Mention: Execute and notify user
+#   2 - Request: Request user permission before execution
+#   3 - Authenticated Request: Require user authentication (not implemented)
+#   4 - Authorized Request: Require delegated permission (not implemented)
+#   5 - Approved Request: Require approval workflow (not implemented)
+
+policies:
+  # === File Operations ===
+
+  # Read operations - visible but allowed
+  - tool_pattern: "mcp_*_file_read"
+    rank: 1  # Mention
+    reason: "File read operations should be visible for transparency"
+
+  - tool_pattern: "mcp_*_read_file"
+    rank: 1  # Mention
+    reason: "File read operations should be visible for transparency"
+
+  # Write operations - require explicit permission
+  - tool_pattern: "mcp_*_file_write"
+    rank: 2  # Request
+    reason: "File write operations require explicit permission"
+
+  - tool_pattern: "mcp_*_write_file"
+    rank: 2  # Request
+    reason: "File write operations require explicit permission"
+
+  # Delete operations - require explicit permission
+  - tool_pattern: "mcp_*_file_delete"
+    rank: 2  # Request
+    reason: "File delete operations require explicit permission"
+
+  - tool_pattern: "mcp_*_delete_file"
+    rank: 2  # Request
+    reason: "File delete operations require explicit permission"
+
+  # Directory operations
+  - tool_pattern: "mcp_*_list_dir*"
+    rank: 1  # Mention
+    reason: "Directory listings should be visible"
+
+  - tool_pattern: "mcp_*_create_dir*"
+    rank: 2  # Request
+    reason: "Directory creation requires permission"
+
+  # === Web Operations ===
+
+  # Web fetching - visible but allowed
+  - tool_pattern: "mcp_*_web_fetch"
+    rank: 1  # Mention
+    reason: "Web requests should be visible for privacy/security"
+
+  - tool_pattern: "mcp_*_fetch_url"
+    rank: 1  # Mention
+    reason: "Web requests should be visible for privacy/security"
+
+  # Search operations - silent (read-only and low-risk)
+  - tool_pattern: "mcp_*_web_search"
+    rank: 0  # Silent
+    reason: "Search operations are read-only and safe"
+
+  - tool_pattern: "mcp_*_search"
+    rank: 0  # Silent
+    reason: "Search operations are read-only and safe"
+
+  # === Git Operations ===
+
+  # Status/info operations - silent
+  - tool_pattern: "mcp_*_git_status"
+    rank: 0  # Silent
+    reason: "Git status checks are read-only"
+
+  - tool_pattern: "mcp_*_git_log"
+    rank: 0  # Silent
+    reason: "Git log is read-only"
+
+  - tool_pattern: "mcp_*_git_diff"
+    rank: 0  # Silent
+    reason: "Git diff is read-only"
+
+  - tool_pattern: "mcp_*_git_blame"
+    rank: 0  # Silent
+    reason: "Git blame is read-only"
+
+  # Write operations - require permission
+  - tool_pattern: "mcp_*_git_commit"
+    rank: 2  # Request
+    reason: "Git commits modify repository state"
+
+  - tool_pattern: "mcp_*_git_push"
+    rank: 2  # Request
+    reason: "Git push affects remote repository"
+
+  - tool_pattern: "mcp_*_git_branch"
+    rank: 2  # Request
+    reason: "Branch operations should be confirmed"
+
+  # === Database Operations ===
+
+  # Query operations - visible
+  - tool_pattern: "mcp_*_db_query"
+    rank: 1  # Mention
+    reason: "Database queries should be visible"
+
+  - tool_pattern: "mcp_*_db_select"
+    rank: 1  # Mention
+    reason: "Database queries should be visible"
+
+  # Execute/modify operations - require permission
+  - tool_pattern: "mcp_*_db_execute"
+    rank: 2  # Request
+    reason: "Database modifications require permission"
+
+  - tool_pattern: "mcp_*_db_insert"
+    rank: 2  # Request
+    reason: "Database modifications require permission"
+
+  - tool_pattern: "mcp_*_db_update"
+    rank: 2  # Request
+    reason: "Database modifications require permission"
+
+  - tool_pattern: "mcp_*_db_delete"
+    rank: 2  # Request
+    reason: "Database deletions require permission"
+
+  # === Documentation/API Operations ===
+
+  # Read-only documentation access - silent
+  - tool_pattern: "mcp_*_doc_*"
+    rank: 0  # Silent
+    reason: "Documentation access is read-only and safe"
+
+  - tool_pattern: "mcp_*_hf_*"
+    rank: 0  # Silent
+    reason: "Hugging Face API is read-only"
+
+  # === Package Registry Operations ===
+
+  # Package search - silent
+  - tool_pattern: "mcp_*_package_search"
+    rank: 0  # Silent
+    reason: "Package search is read-only"
+
+  - tool_pattern: "mcp_*_npm_*"
+    rank: 0  # Silent
+    reason: "npm registry access is read-only"
+
+  - tool_pattern: "mcp_*_pypi_*"
+    rank: 0  # Silent
+    reason: "PyPI access is read-only"
+
+  # === Vector Database Operations ===
+
+  # Search operations - silent
+  - tool_pattern: "mcp_*_vector_search"
+    rank: 0  # Silent
+    reason: "Vector search is read-only"
+
+  # Indexing operations - mention
+  - tool_pattern: "mcp_*_vector_index"
+    rank: 1  # Mention
+    reason: "Indexing operations should be visible"
+
+  # === Container/System Operations ===
+
+  # Inspection - mention
+  - tool_pattern: "mcp_*_docker_list"
+    rank: 1  # Mention
+    reason: "Container inspection should be visible"
+
+  - tool_pattern: "mcp_*_docker_inspect"
+    rank: 1  # Mention
+    reason: "Container inspection should be visible"
+
+  # Control operations - require permission
+  - tool_pattern: "mcp_*_docker_start"
+    rank: 2  # Request
+    reason: "Container control requires permission"
+
+  - tool_pattern: "mcp_*_docker_stop"
+    rank: 2  # Request
+    reason: "Container control requires permission"
+
+  - tool_pattern: "mcp_*_docker_delete"
+    rank: 2  # Request
+    reason: "Container deletion requires permission"
+
+  # === Default Catch-All ===
+
+  # Conservative default for unmatched tools
+  - tool_pattern: "*"
+    rank: 2  # Request
+    reason: "Default: require permission for unrecognized tools"
+
+# User-granted permissions (populated at runtime)
+# These grants override policies above
+grants: []

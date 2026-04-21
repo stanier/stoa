@@ -271,7 +271,7 @@ services:
       LOCAL_IDP_DATABASE_URL: postgres://localidp:${LOCAL_IDP_DB_PASSWORD}@postgres-localidp:5432/localidp?sslmode=disable
       LOCAL_IDP_ISSUER: ${LOCAL_IDP_ISSUER}
       LOCAL_IDP_EXTERNAL_URL: ${LOCAL_IDP_EXTERNAL_URL}
-      LOCAL_IDP_CLIENT_ID: encabulator
+      LOCAL_IDP_CLIENT_ID: stoa
       LOCAL_IDP_REDIRECT_URIS: ${LOCAL_IDP_REDIRECT_URIS}
       AUTHD_OAUTH_LOCAL_CLIENT_SECRET: ${AUTHD_OAUTH_LOCAL_CLIENT_SECRET}
     ports:
@@ -396,7 +396,7 @@ services:
       AGENTD_SQUID_CONF_PATH: /app/squid/squid.conf
       MCP_PROXY_ADDRESS: "http://stoa-squid:3128"
     volumes:
-      - ./config:/root/.config/encabulator:ro
+      - ./config:/root/.config/stoa:ro
       - ./skills:/app/skills:ro
       - ./data/traces:/app/traces
       - ./data/logs:/app/logs
@@ -472,7 +472,7 @@ services:
     environment:
       AGENT_ADDRESS: http://agentd:7777
     volumes:
-      - ./config:/root/.config/encabulator:ro
+      - ./config:/root/.config/stoa:ro
       - ./data/traces:/app/traces
       - ./data/logs:/app/logs
     depends_on:
@@ -513,7 +513,7 @@ services:
       ZULIP_EMAIL: ${ZULIP_EMAIL}
       ZULIP_API_KEY: ${ZULIP_API_KEY}
     volumes:
-      - ./config:/root/.config/encabulator:ro
+      - ./config:/root/.config/stoa:ro
       - ./data/logs:/app/logs
       - mcp-workspace:/tmp/mcp-workspace
     depends_on:
@@ -554,7 +554,7 @@ services:
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
       SLACK_APP_TOKEN: ${SLACK_APP_TOKEN}
     volumes:
-      - ./config:/root/.config/encabulator:ro
+      - ./config:/root/.config/stoa:ro
       - ./data/logs:/app/logs
     depends_on:
       - agentd
@@ -593,7 +593,7 @@ services:
       DISCORD_ENABLED: ${DISCORD_ENABLED}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
     volumes:
-      - ./config:/root/.config/encabulator:ro
+      - ./config:/root/.config/stoa:ro
       - ./data/logs:/app/logs
     depends_on:
       - agentd
@@ -633,7 +633,7 @@ services:
       MATRIX_USERNAME: ${MATRIX_USERNAME}
       MATRIX_PASSWORD: ${MATRIX_PASSWORD}
     volumes:
-      - ./config:/root/.config/encabulator:ro
+      - ./config:/root/.config/stoa:ro
       - ./data/logs:/app/logs
     depends_on:
       - agentd
