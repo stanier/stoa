@@ -2,8 +2,10 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -21,6 +23,20 @@ type UpstreamConfig struct {
 	APIKeyFile       string `yaml:"api_key_file"`       // file path containing the key (e.g. a mounted secret)
 	DefaultModel     string `yaml:"default_model"`      // used when request model is empty
 	DefaultMaxTokens int    `yaml:"default_max_tokens"` // used when request max_tokens is absent
+	TLSSkipVerify    bool   `yaml:"tls_skip_verify"`    // skip TLS certificate verification (for self-signed certs)
+}
+
+// buildHTTPClient returns an *http.Client appropriate for this upstream.
+// When TLSSkipVerify is false the caller should use http.DefaultClient.
+func (c UpstreamConfig) buildHTTPClient() *http.Client {
+	if !c.TLSSkipVerify {
+		return nil // callers treat nil as "use SDK default"
+	}
+	return &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+		},
+	}
 }
 
 // resolveAPIKey returns the API key for an upstream config.
@@ -63,13 +79,14 @@ func NewUpstream(cfg UpstreamConfig) (*Upstream, error) {
 	var err error
 	apiKey := cfg.resolveAPIKey()
 
+	httpClient := cfg.buildHTTPClient()
 	switch cfg.Dialect {
 	case "openai":
-		client, err = llm.NewOpenAIClientSimple(apiKey, cfg.APIURL, cfg.DefaultModel, maxTokens)
+		client, err = llm.NewOpenAIClientSimple(apiKey, cfg.APIURL, cfg.DefaultModel, maxTokens, httpClient)
 	case "anthropic":
-		client, err = llm.NewAnthropicClientSimple(apiKey, cfg.APIURL, cfg.DefaultModel, maxTokens)
+		client, err = llm.NewAnthropicClientSimple(apiKey, cfg.APIURL, cfg.DefaultModel, maxTokens, httpClient)
 	case "gemini":
-		client, err = llm.NewGeminiClient(apiKey, cfg.APIURL, cfg.DefaultModel, maxTokens)
+		client, err = llm.NewGeminiClient(apiKey, cfg.APIURL, cfg.DefaultModel, maxTokens, httpClient)
 	default:
 		return nil, fmt.Errorf("unknown dialect %q (want \"openai\", \"anthropic\", or \"gemini\")", cfg.Dialect)
 	}
@@ -78,6 +95,9 @@ func NewUpstream(cfg UpstreamConfig) (*Upstream, error) {
 	}
 	return &Upstream{cfg: cfg, client: client}, nil
 }
+
+// Name returns the upstream's configured name.
+func (u *Upstream) Name() string { return u.cfg.Name }
 
 // Stream calls the upstream and returns a StreamChunk channel plus an
 // UpstreamHeaders sink. The sink is populated (asynchronously, before the
@@ -187,4 +207,26 @@ func (r *Router) Resolve(model string) *Upstream {
 		}
 	}
 	return r.fallback
+}
+
+// ResolveChain returns the primary upstream for model followed by any additional
+// upstreams named in fallbackChain (in order, deduped). When fallbackChain is
+// empty only the primary upstream is returned.
+func (r *Router) ResolveChain(model string, fallbackChain []string) []*Upstream {
+	primary := r.Resolve(model)
+	if len(fallbackChain) == 0 {
+		return []*Upstream{primary}
+	}
+	seen := map[string]bool{primary.cfg.Name: true}
+	chain := []*Upstream{primary}
+	for _, name := range fallbackChain {
+		if seen[name] {
+			continue
+		}
+		if up, ok := r.upstreams[name]; ok {
+			chain = append(chain, up)
+			seen[name] = true
+		}
+	}
+	return chain
 }

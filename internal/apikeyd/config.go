@@ -14,6 +14,9 @@ type Config struct {
 	ExternalURL string
 	DatabaseURL string
 	AuthdURL    string
+	// AdminToken gates the /admin/... endpoints. Read from APIKEYD_ADMIN_TOKEN.
+	// When empty, admin endpoints return 404.
+	AdminToken string
 }
 
 // fileConfig is the shape of apikeyd.yaml.
@@ -91,5 +94,6 @@ func LoadConfig(path string) (*Config, error) {
 		ExternalURL: extURL,
 		DatabaseURL: dbURL,
 		AuthdURL:    authdURL,
+		AdminToken:  os.Getenv("APIKEYD_ADMIN_TOKEN"),
 	}, nil
 }

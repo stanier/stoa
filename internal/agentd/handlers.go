@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -37,7 +36,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionID := uuid.New().String()
-	sess := newSession(sessionID, req.Persona, req.Source, req.UserID, req.AllowedTools)
+	sess := newSession(sessionID, req.Persona, req.Source, req.UserID, req.LLMKey, req.AllowedTools)
 	sess.tracer = app.SetupTracer(s.cfg, sessionID)
 
 	// Build the initial LLM context (system prompt + tools).
@@ -1045,47 +1044,14 @@ func (s *Server) handleSessionTools(w http.ResponseWriter, r *http.Request, sess
 }
 
 // handleMetrics handles GET /metrics.
-//
-// By default (or when Accept: application/json) it returns a JSON document:
-//
-//	{
-//	  "providers": { "<name>": { "request_count": N, "error_rate": F, "p95_latency_ms": N } },
-//	  "cache":     { "hits": N, "misses": N, "hit_rate": F }
-//	}
-//
-// When the Accept header contains "application/openmetrics-text" or "text/plain"
-// it returns Prometheus-compatible output for scraping by Grafana/Prometheus.
-//
-// The endpoint is exempt from auth middleware (like /acp/ping) so that
-// monitoring systems do not need credentials.
+// Provider health metrics have moved to llm-proxy (/metrics on port 8080).
+// This endpoint returns cache stats that are still owned by agentd.
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	accept := r.Header.Get("Accept")
-	wantPrometheus := strings.Contains(accept, "application/openmetrics-text") ||
-		strings.Contains(accept, "text/plain")
-
-	// Collect provider snapshots (safe when statsRegistry is nil).
-	type providerSnap struct {
-		RequestCount int     `json:"request_count"`
-		ErrorRate    float64 `json:"error_rate"`
-		P95LatencyMs int64   `json:"p95_latency_ms"`
-	}
-	providerSnapshots := map[string]providerSnap{}
-	if s.statsRegistry != nil {
-		for name, snap := range s.statsRegistry.Snapshot() {
-			providerSnapshots[name] = providerSnap{
-				RequestCount: snap.RequestCount,
-				ErrorRate:    snap.ErrorRate,
-				P95LatencyMs: snap.P95LatencyMs,
-			}
-		}
-	}
-
-	// Collect cache stats (safe when llmCache is nil).
 	type cacheSnap struct {
 		Hits    int64   `json:"hits"`
 		Misses  int64   `json:"misses"`
@@ -1102,56 +1068,13 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		cs = &cacheSnap{Hits: st.Hits, Misses: st.Misses, HitRate: hitRate}
 	}
 
-	if wantPrometheus {
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		b := &strings.Builder{}
-		b.WriteString("# HELP stoa_provider_requests_total Total LLM requests per provider\n")
-		b.WriteString("# TYPE stoa_provider_requests_total counter\n")
-		for name, snap := range providerSnapshots {
-			fmt.Fprintf(b, "stoa_provider_requests_total{provider=%q} %d\n", name, snap.RequestCount)
-		}
-		b.WriteString("# HELP stoa_provider_error_rate Error rate (0-1) per provider\n")
-		b.WriteString("# TYPE stoa_provider_error_rate gauge\n")
-		for name, snap := range providerSnapshots {
-			fmt.Fprintf(b, "stoa_provider_error_rate{provider=%q} %g\n", name, snap.ErrorRate)
-		}
-		b.WriteString("# HELP stoa_provider_p95_latency_ms P95 latency in ms per provider\n")
-		b.WriteString("# TYPE stoa_provider_p95_latency_ms gauge\n")
-		for name, snap := range providerSnapshots {
-			fmt.Fprintf(b, "stoa_provider_p95_latency_ms{provider=%q} %d\n", name, snap.P95LatencyMs)
-		}
-		if cs != nil {
-			b.WriteString("# HELP stoa_cache_hits_total Cache hit count\n")
-			b.WriteString("# TYPE stoa_cache_hits_total counter\n")
-			fmt.Fprintf(b, "stoa_cache_hits_total %d\n", cs.Hits)
-			b.WriteString("# HELP stoa_cache_misses_total Cache miss count\n")
-			b.WriteString("# TYPE stoa_cache_misses_total counter\n")
-			fmt.Fprintf(b, "stoa_cache_misses_total %d\n", cs.Misses)
-		}
-		_, _ = io.WriteString(w, b.String())
-		return
-	}
-
-	// Rate limit section.
-	type rateLimitSnap struct {
-		Enabled bool `json:"enabled"`
-	}
-	var rl *rateLimitSnap
-	if s.rateLimiter != nil {
-		rl = &rateLimitSnap{Enabled: true}
-	}
-
-	// JSON response.
 	type jsonResponse struct {
-		Providers map[string]providerSnap `json:"providers"`
-		Cache     *cacheSnap              `json:"cache,omitempty"`
-		RateLimit *rateLimitSnap          `json:"rate_limit,omitempty"`
-	}
-	resp := jsonResponse{
-		Providers: providerSnapshots,
-		Cache:     cs,
-		RateLimit: rl,
+		Cache *cacheSnap `json:"cache,omitempty"`
+		Note  string     `json:"note"`
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(jsonResponse{
+		Cache: cs,
+		Note:  "provider health metrics are at llm-proxy /metrics",
+	})
 }

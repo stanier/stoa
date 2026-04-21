@@ -40,6 +40,9 @@ func (s *Server) registerRoutes() {
 	// ── Key verification (called by llm-proxy, no session cookie) ────────
 	s.mux.HandleFunc("/keys/verify", s.handleVerifyKey)
 
+	// ── Admin endpoints (APIKEYD_ADMIN_TOKEN required) ────────────────────
+	s.mux.Handle("/admin/users/", s.requireAdminToken(http.HandlerFunc(s.handleAdminProvisionKey)))
+
 	// ── Health check ──────────────────────────────────────────────────────
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
 

@@ -17,8 +17,28 @@ import (
 	"github.com/stanier/stoa/internal/apikeydclient"
 	"github.com/stanier/stoa/internal/chat"
 	"github.com/stanier/stoa/internal/llm"
+	"github.com/stanier/stoa/internal/llm/stats"
 	"github.com/stanier/stoa/internal/logging"
+	"github.com/stanier/stoa/internal/ratelimit"
 )
+
+type proxyCtxKey int
+
+const ctxUserID proxyCtxKey = iota
+
+// GatewayRateLimitConfig controls per-user request velocity at the proxy.
+type GatewayRateLimitConfig struct {
+	Enabled           bool `yaml:"enabled"`
+	RequestsPerMinute int  `yaml:"requests_per_minute"`
+}
+
+// GatewayConfig holds optional gateway-level features for llm-proxy.
+type GatewayConfig struct {
+	// FallbackChain is an ordered list of upstream names to try when the
+	// primary upstream returns a retryable error.
+	FallbackChain []string               `yaml:"fallback_chain"`
+	RateLimit     GatewayRateLimitConfig `yaml:"rate_limit"`
+}
 
 // Config is the top-level proxy configuration.
 type Config struct {
@@ -26,12 +46,16 @@ type Config struct {
 	Upstreams  []UpstreamConfig `yaml:"upstreams"`
 	Routes     []RouteConfig    `yaml:"routes"`
 	APIKeydURL string           `yaml:"apikeyd_url"` // if set, inbound requests require a valid API key
+	Gateway    GatewayConfig    `yaml:"gateway"`
 }
 
 // Server is an HTTP server that proxies LLM API requests.
 type Server struct {
+	cfg       Config
 	router    *Router
 	keyClient *apikeydclient.Client // nil = no auth required
+	statsReg  *stats.Registry       // always non-nil
+	limiter   *ratelimit.Limiter    // nil when rate limiting is disabled
 	hooks     Hooks
 }
 
@@ -41,15 +65,24 @@ func NewServer(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("proxy: %w", err)
 	}
-	s := &Server{router: router}
+	s := &Server{
+		cfg:      cfg,
+		router:   router,
+		statsReg: stats.NewRegistry(),
+	}
 	if cfg.APIKeydURL != "" {
 		s.keyClient = apikeydclient.New(cfg.APIKeydURL)
+	}
+	if cfg.Gateway.RateLimit.Enabled && cfg.Gateway.RateLimit.RequestsPerMinute > 0 {
+		s.limiter = ratelimit.New(time.Minute, cfg.Gateway.RateLimit.RequestsPerMinute)
+		logging.Infof("proxy: rate limiting enabled (%d req/min per user)", cfg.Gateway.RateLimit.RequestsPerMinute)
 	}
 	return s, nil
 }
 
 // requireAPIKey is middleware that validates an inbound API key via apikeyd.
 // If no keyClient is configured the request passes through without auth.
+// On success it attaches the caller's user_id to the request context.
 func (s *Server) requireAPIKey(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.keyClient == nil {
@@ -61,12 +94,30 @@ func (s *Server) requireAPIKey(next http.Handler) http.Handler {
 			writeOpenAIError(w, http.StatusUnauthorized, "missing API key")
 			return
 		}
-		if _, err := s.keyClient.VerifyKey(r.Context(), rawKey); err != nil {
+		info, err := s.keyClient.VerifyKey(r.Context(), rawKey)
+		if err != nil {
 			writeOpenAIError(w, http.StatusUnauthorized, "invalid API key: "+err.Error())
 			return
 		}
-		next.ServeHTTP(w, r)
+		// Attach user_id for downstream rate limiting and attribution.
+		ctx := context.WithValue(r.Context(), ctxUserID, info.UserID)
+
+		// Per-user rate limiting.
+		if s.limiter != nil && info.UserID != "" {
+			if ok, reason := s.limiter.Allow(info.UserID); !ok {
+				writeOpenAIError(w, http.StatusTooManyRequests, "rate limit exceeded: "+reason)
+				return
+			}
+		}
+
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// userIDFromContext returns the authenticated user ID attached by requireAPIKey.
+func userIDFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(ctxUserID).(string)
+	return v
 }
 
 // extractInboundKey returns the raw key from Authorization: Bearer or x-api-key.
@@ -92,7 +143,126 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/v1beta/models/", auth(http.HandlerFunc(s.handleGemini)))
 	// Models listing (best-effort: return models from all upstreams)
 	mux.Handle("/v1/models", auth(http.HandlerFunc(s.handleModels)))
+	// Metrics — auth-exempt so Prometheus scrapers do not need an API key.
+	mux.HandleFunc("/metrics", s.handleMetrics)
 	return corsMiddleware(requestIDMiddleware(stripSDKHeaders(mux)))
+}
+
+// resolveAndStream resolves the upstream chain for model and calls fn with each
+// upstream in order. On a retryable error it advances to the next upstream.
+// Returns the first successful result.
+type streamFn func(up *Upstream) (<-chan llm.StreamChunk, *llm.UpstreamHeaders, error)
+
+func (s *Server) resolveAndStream(model string, fn streamFn) (<-chan llm.StreamChunk, *llm.UpstreamHeaders, error) {
+	chain := s.router.ResolveChain(model, s.cfg.Gateway.FallbackChain)
+	var lastErr error
+	for _, up := range chain {
+		start := time.Now()
+		ch, headers, err := fn(up)
+		if err == nil {
+			if s.statsReg != nil {
+				ch = wrapStream(ch, start, up.Name(), s.statsReg)
+			}
+			return ch, headers, nil
+		}
+		elapsed := time.Since(start).Milliseconds()
+		if s.statsReg != nil {
+			s.statsReg.Get(up.Name()).Record(elapsed, true)
+		}
+		if llm.IsRetryable(err) {
+			logging.Warnf("proxy: upstream %q retryable error, trying next: %v", up.Name(), err)
+			lastErr = err
+			continue
+		}
+		return nil, nil, err
+	}
+	if lastErr != nil {
+		return nil, nil, fmt.Errorf("all upstreams failed: %w", lastErr)
+	}
+	return nil, nil, fmt.Errorf("no upstreams for model %q", model)
+}
+
+// wrapStream passes all chunks through and records stats when the stream closes.
+func wrapStream(src <-chan llm.StreamChunk, start time.Time, provider string, reg *stats.Registry) <-chan llm.StreamChunk {
+	out := make(chan llm.StreamChunk, cap(src)+1)
+	go func() {
+		defer close(out)
+		hasErr := false
+		for chunk := range src {
+			if chunk.Error != nil {
+				hasErr = true
+			}
+			out <- chunk
+		}
+		reg.Get(provider).Record(time.Since(start).Milliseconds(), hasErr)
+	}()
+	return out
+}
+
+// handleMetrics serves provider health statistics in JSON or Prometheus text format.
+// This endpoint is auth-exempt.
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	accept := r.Header.Get("Accept")
+	wantPrometheus := strings.Contains(accept, "application/openmetrics-text") ||
+		strings.Contains(accept, "text/plain")
+
+	snap := s.statsReg.Snapshot()
+
+	type providerSnap struct {
+		RequestCount int     `json:"request_count"`
+		ErrorRate    float64 `json:"error_rate"`
+		P95LatencyMs int64   `json:"p95_latency_ms"`
+	}
+	providers := make(map[string]providerSnap, len(snap))
+	for name, ps := range snap {
+		providers[name] = providerSnap{
+			RequestCount: ps.RequestCount,
+			ErrorRate:    ps.ErrorRate,
+			P95LatencyMs: ps.P95LatencyMs,
+		}
+	}
+
+	type rateLimitSnap struct {
+		Enabled bool `json:"enabled"`
+	}
+	var rl *rateLimitSnap
+	if s.limiter != nil {
+		rl = &rateLimitSnap{Enabled: true}
+	}
+
+	if wantPrometheus {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		b := &strings.Builder{}
+		b.WriteString("# HELP stoa_proxy_requests_total Total LLM requests per upstream\n")
+		b.WriteString("# TYPE stoa_proxy_requests_total counter\n")
+		for name, ps := range providers {
+			fmt.Fprintf(b, "stoa_proxy_requests_total{upstream=%q} %d\n", name, ps.RequestCount)
+		}
+		b.WriteString("# HELP stoa_proxy_error_rate Error rate (0-1) per upstream\n")
+		b.WriteString("# TYPE stoa_proxy_error_rate gauge\n")
+		for name, ps := range providers {
+			fmt.Fprintf(b, "stoa_proxy_error_rate{upstream=%q} %g\n", name, ps.ErrorRate)
+		}
+		b.WriteString("# HELP stoa_proxy_p95_latency_ms P95 latency in ms per upstream\n")
+		b.WriteString("# TYPE stoa_proxy_p95_latency_ms gauge\n")
+		for name, ps := range providers {
+			fmt.Fprintf(b, "stoa_proxy_p95_latency_ms{upstream=%q} %d\n", name, ps.P95LatencyMs)
+		}
+		_, _ = io.WriteString(w, b.String())
+		return
+	}
+
+	type jsonResponse struct {
+		Upstreams map[string]providerSnap `json:"upstreams"`
+		RateLimit *rateLimitSnap          `json:"rate_limit,omitempty"`
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(jsonResponse{Upstreams: providers, RateLimit: rl})
 }
 
 // stripSDKHeaders removes SDK telemetry headers (e.g. x-stainless-*) before
@@ -225,7 +395,9 @@ func (s *Server) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 			wg.Add(1)
 			go func(choiceIdx int) {
 				defer wg.Done()
-				ch, sink, err := upstream.Stream(r.Context(), messages, tools, req.Model, req.MaxTokens, req.Temperature, req.TopP, req.ToolChoice, nil, nil, "", req.ResponseFormat, extras)
+				ch, sink, err := s.resolveAndStream(req.Model, func(up *Upstream) (<-chan llm.StreamChunk, *llm.UpstreamHeaders, error) {
+					return up.Stream(r.Context(), messages, tools, req.Model, req.MaxTokens, req.Temperature, req.TopP, req.ToolChoice, nil, nil, "", req.ResponseFormat, extras)
+				})
 				// Keep the sink from choice 0 for rate-limit header forwarding.
 				if choiceIdx == 0 && sink != nil {
 					headerSinkMu.Lock()
@@ -481,7 +653,9 @@ func (s *Server) handleAnthropic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Stream {
-		ch, headerSink, err := upstream.Stream(r.Context(), messages, tools, req.Model, &maxTokens, req.Temperature, req.TopP, req.ToolChoice, thinkingEnabled, thinkingBudget, anthropicBeta, nil, anthropicExtras)
+		ch, headerSink, err := s.resolveAndStream(req.Model, func(up *Upstream) (<-chan llm.StreamChunk, *llm.UpstreamHeaders, error) {
+			return up.Stream(r.Context(), messages, tools, req.Model, &maxTokens, req.Temperature, req.TopP, req.ToolChoice, thinkingEnabled, thinkingBudget, anthropicBeta, nil, anthropicExtras)
+		})
 		if err != nil {
 			writeAnthropicError(w, http.StatusBadGateway, "upstream error: "+err.Error())
 			return
@@ -573,6 +747,36 @@ func (s *Server) handleAnthropic(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				continue
+			}
+
+			if chunk.Thinking != "" {
+				if openBlock != "thinking" {
+					if !closeBlock() {
+						return
+					}
+					idx := blockIndex
+					blockIndex++
+					if !writeEvents([][]byte{
+						anthropicSSE("content_block_start", AnthropicStreamEvent{
+							Type:         "content_block_start",
+							Index:        &idx,
+							ContentBlock: &AnthropicStreamBlock{Type: "thinking"},
+						}),
+					}) {
+						return
+					}
+					openBlock = "thinking"
+				}
+				idx := blockIndex - 1
+				if !writeEvents([][]byte{
+					anthropicSSE("content_block_delta", AnthropicStreamEvent{
+						Type:  "content_block_delta",
+						Index: &idx,
+						Delta: &AnthropicStreamDelta{Type: "thinking_delta", Thinking: chunk.Thinking},
+					}),
+				}) {
+					return
+				}
 			}
 
 			if chunk.Content != "" {
@@ -754,7 +958,9 @@ func (s *Server) handleGemini(w http.ResponseWriter, r *http.Request) {
 	upstream := s.router.Resolve(model)
 
 	if streaming {
-		ch, headerSink, err := upstream.Stream(r.Context(), messages, tools, model, maxTokens, temperature, topP, nil, nil, nil, "", nil, nil)
+		ch, headerSink, err := s.resolveAndStream(model, func(up *Upstream) (<-chan llm.StreamChunk, *llm.UpstreamHeaders, error) {
+			return up.Stream(r.Context(), messages, tools, model, maxTokens, temperature, topP, nil, nil, nil, "", nil, nil)
+		})
 		if err != nil {
 			writeGeminiError(w, http.StatusBadGateway, "upstream error: "+err.Error())
 			return

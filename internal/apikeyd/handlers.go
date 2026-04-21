@@ -3,6 +3,7 @@ package apikeyd
 import (
 	"encoding/json"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 )
@@ -124,6 +125,42 @@ func (s *Server) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ─── Admin endpoint (called by internal services with APIKEYD_ADMIN_TOKEN) ──
+
+// POST /admin/users/{user_id}/key
+//
+// Atomically revokes any existing active service key for the user and issues a
+// fresh one. The raw key is returned exactly once — the caller must store it.
+// Subsequent calls for the same user rotate the key.
+func (s *Server) handleAdminProvisionKey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Extract user_id from /admin/users/{user_id}/key
+	userID := path.Base(path.Dir(r.URL.Path))
+	if userID == "" || userID == "." || userID == "users" {
+		writeError(w, http.StatusBadRequest, "user_id is required")
+		return
+	}
+
+	const serviceName = "agentd-service"
+	rawKey, rec, err := s.db.ProvisionServiceKey(r.Context(), userID, serviceName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to provision key")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"key":        rawKey,
+		"id":         rec.ID,
+		"user_id":    rec.UserID,
+		"prefix":     rec.Prefix,
+		"created_at": rec.CreatedAt,
+	})
 }
 
 // ─── Verification endpoint (called by llm-proxy, not browsers) ─────────────

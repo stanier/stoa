@@ -127,6 +127,62 @@ func (d *DB) CreateKey(ctx context.Context, userID, name string, expiresAt *time
 	}, nil
 }
 
+// ProvisionServiceKey is an admin-only operation that atomically revokes any
+// existing active key for (userID, name) and creates a fresh one, returning
+// the raw key value. It is idempotent in the sense that a second call
+// for the same user simply rotates the key. The raw key is returned exactly
+// once — callers must persist it themselves.
+func (d *DB) ProvisionServiceKey(ctx context.Context, userID, name string) (rawKey string, rec *KeyRecord, err error) {
+	raw, err := generateRawKey()
+	if err != nil {
+		return "", nil, fmt.Errorf("apikeyd: generate key: %w", err)
+	}
+	hash := hashKey(raw)
+	prefix := displayPrefix(raw)
+
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return "", nil, fmt.Errorf("apikeyd: begin tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	// Revoke existing active key for this (user_id, name), if any.
+	_, err = tx.Exec(ctx, `
+		UPDATE api_keys SET revoked_at = now()
+		WHERE user_id = $1 AND name = $2 AND revoked_at IS NULL
+	`, userID, name)
+	if err != nil {
+		return "", nil, fmt.Errorf("apikeyd: revoke existing service key: %w", err)
+	}
+
+	var id string
+	var createdAt time.Time
+	err = tx.QueryRow(ctx, `
+		INSERT INTO api_keys (user_id, name, key_hash, prefix)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, created_at
+	`, userID, name, hash, prefix).Scan(&id, &createdAt)
+	if err != nil {
+		return "", nil, fmt.Errorf("apikeyd: insert service key: %w", err)
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return "", nil, fmt.Errorf("apikeyd: commit: %w", err)
+	}
+
+	return raw, &KeyRecord{
+		ID:        id,
+		UserID:    userID,
+		Name:      name,
+		Prefix:    prefix,
+		CreatedAt: createdAt,
+	}, nil
+}
+
 // ListKeys returns all non-revoked keys for a user, newest first.
 func (d *DB) ListKeys(ctx context.Context, userID string) ([]KeyRecord, error) {
 	rows, err := d.pool.Query(ctx, `

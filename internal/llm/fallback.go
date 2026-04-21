@@ -235,6 +235,10 @@ func instrumentedStream(src <-chan StreamChunk, start time.Time, provider string
 	return out
 }
 
+// IsRetryable is the exported form of isRetryable for use by other packages
+// (e.g. llm-proxy) that need to apply the same retry classification.
+func IsRetryable(err error) bool { return isRetryable(err) }
+
 // isRetryable reports whether err warrants trying the next provider in the chain.
 // It returns true for:
 //   - context.DeadlineExceeded

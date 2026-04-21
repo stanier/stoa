@@ -10,6 +10,17 @@ listen: ":8080"
 # Remove or leave empty to run the proxy without inbound authentication.
 apikeyd_url: "http://apikeyd:8889"
 
+# Optional gateway features.
+gateway:
+  # fallback_chain: ordered list of upstream names to try when the primary
+  # upstream returns a retryable error (5xx, network failure, timeout).
+  # fallback_chain: ["anthropic", "openai"]
+
+  # Per-user rate limiting (keyed on user_id from apikeyd key verification).
+  rate_limit:
+    enabled: false
+    requests_per_minute: 60
+
 upstreams:
   - name: anthropic
     dialect: anthropic

@@ -3,6 +3,7 @@ package apikeyd
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -21,6 +22,23 @@ const ctxUserID ctxKey = iota
 func UserIDFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(ctxUserID).(string)
 	return v
+}
+
+// requireAdminToken gates a handler behind APIKEYD_ADMIN_TOKEN bearer auth.
+// When no admin token is configured the route returns 404 (not exposed at all).
+func (s *Server) requireAdminToken(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.AdminToken == "" {
+			http.NotFound(w, r)
+			return
+		}
+		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if subtle.ConstantTimeCompare([]byte(bearer), []byte(s.cfg.AdminToken)) != 1 {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requireAuth is middleware that validates the __session cookie against authd.

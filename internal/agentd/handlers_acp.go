@@ -147,7 +147,7 @@ func (s *Server) handleACPCreateRun(w http.ResponseWriter, r *http.Request) {
 	if sess == nil {
 		sessionID := uuid.New().String()
 		userID, _ := UserIDFromContext(r.Context())
-		sess = newSession(sessionID, dbAgent.Name, "acp", userID, dbAgent.AllowedTools)
+		sess = newSession(sessionID, dbAgent.Name, "acp", userID, "", dbAgent.AllowedTools)
 		sess.tracer = app.SetupTracer(s.cfg, sessionID)
 		sess.llmCtx = buildLLMContextFromDBAgent(s, dbAgent)
 		if sess.llmCtx.SystemPrompt != "" {

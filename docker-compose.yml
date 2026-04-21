@@ -190,6 +190,7 @@ services:
       APIKEYD_DATABASE_URL: postgres://apikeyd:${APIKEYD_DB_PASSWORD}@postgres-apikeyd:5432/apikeyd?sslmode=disable
       APIKEYD_EXTERNAL_URL: ${APIKEYD_EXTERNAL_URL}
       APIKEYD_AUTHD_URL: http://authd:8888
+      APIKEYD_ADMIN_TOKEN: ${APIKEYD_ADMIN_TOKEN}
     volumes:
       - ./config/apikeyd.yaml:/etc/apikeyd/config.yaml:ro
     command: ["-config", "/etc/apikeyd/config.yaml"]
@@ -316,6 +317,9 @@ services:
       AUTHD_CONFIG: /etc/authd/config.yaml
       AUTHD_OAUTH_LOCAL_CLIENT_SECRET: ${AUTHD_OAUTH_LOCAL_CLIENT_SECRET}
       AUTHD_ALLOWED_REDIRECT_ORIGINS: ${AUTHD_ALLOWED_REDIRECT_ORIGINS}
+      # Per-user LLM key provisioning at login (best-effort — login succeeds if apikeyd is down).
+      AUTHD_APIKEYD_URL: http://apikeyd:8889
+      AUTHD_APIKEYD_ADMIN_TOKEN: ${APIKEYD_ADMIN_TOKEN}
     volumes:
       - ./config/authd.yaml:/etc/authd/config.yaml:ro
     depends_on:

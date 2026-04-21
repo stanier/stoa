@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stanier/stoa/internal/apikeydclient"
 	"github.com/stanier/stoa/internal/authdb"
 	"github.com/stanier/stoa/internal/logging"
 	"github.com/stanier/stoa/internal/ratelimit"
@@ -45,6 +46,11 @@ type Server struct {
 	adminToken             string
 	allowedRedirectOrigins []string
 	verifyLimiter          *ratelimit.Limiter // rate-limits /token/verify by remote IP
+
+	// apikeydClient is set when AUTHD_APIKEYD_URL is configured.
+	// Used to provision per-user llmp_* keys at login time (best-effort).
+	apikeydClient     *apikeydclient.Client
+	apikeydAdminToken string
 }
 
 // NewServer constructs, configures, and wires up a Server.
@@ -75,6 +81,14 @@ func NewServer(cfg Config) (*Server, error) {
 		adminToken:             os.Getenv("AUTHD_ADMIN_TOKEN"),
 		allowedRedirectOrigins: allowedOrigins,
 		verifyLimiter:          ratelimit.New(time.Minute, verifyRateLimit),
+		apikeydAdminToken:      os.Getenv("AUTHD_APIKEYD_ADMIN_TOKEN"),
+	}
+
+	// Wire up the apikeyd client for per-user LLM key provisioning at login.
+	// Best-effort: if apikeyd is unavailable, login succeeds without a key.
+	if apikeydURL := os.Getenv("AUTHD_APIKEYD_URL"); apikeydURL != "" && s.apikeydAdminToken != "" {
+		s.apikeydClient = apikeydclient.New(apikeydURL)
+		logging.Infof("authd: per-user LLM key provisioning enabled via %s", apikeydURL)
 	}
 
 	// Connect to Postgres if configured.
@@ -281,7 +295,7 @@ func (s *Server) handleLoginPoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionToken, errMsg, done := s.logins.consume(loginID)
+	sessionToken, llmKey, errMsg, done := s.logins.consume(loginID)
 	if !done {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -296,7 +310,11 @@ func (s *Server) handleLoginPoll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"session_token": sessionToken})
+	resp := map[string]string{"session_token": sessionToken}
+	if llmKey != "" {
+		resp["llm_key"] = llmKey
+	}
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // ── GET /oauth/start ─────────────────────────────────────────────────────────
@@ -405,7 +423,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		// No database — stub response for end-to-end flow testing without Postgres.
 		logging.Warnf("authd: no database configured; returning stub session token for %s", info.Email)
 		if entry.loginID != "" {
-			s.logins.complete(entry.loginID, "no-db-stub")
+			s.logins.complete(entry.loginID, "no-db-stub", "")
 			s.renderCallbackSuccess(w, info.Email)
 		} else {
 			w.Header().Set("Content-Type", "application/json")
@@ -436,7 +454,17 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.logins.complete(entry.loginID, rawToken) // no-op when loginID is empty
+	// Provision the per-user llmp_* LLM key (best-effort — login succeeds even if apikeyd is down).
+	var llmKey string
+	if s.apikeydClient != nil {
+		if pk, pkErr := s.apikeydClient.ProvisionUserKey(r.Context(), userID, s.apikeydAdminToken); pkErr != nil {
+			logging.Warnf("authd: provision LLM key for user %s: %v", userID, pkErr)
+		} else {
+			llmKey = pk.Key
+		}
+	}
+
+	s.logins.complete(entry.loginID, rawToken, llmKey) // no-op when loginID is empty
 
 	// If this was a Zulip account link flow, store the email → user_id mapping.
 	if entry.zulipLinkToken != "" {
@@ -457,8 +485,11 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	if entry.loginID != "" {
 		login, ok := s.logins.get(entry.loginID)
 		if ok && login.postLoginRedirect != "" {
-			// Web BFF flow — redirect browser back to the app with the token.
+			// Web BFF flow — redirect browser back to the app with the token and LLM key.
 			dest := login.postLoginRedirect + "?token=" + rawToken
+			if llmKey != "" {
+				dest += "&llm_key=" + llmKey
+			}
 			http.Redirect(w, r, dest, http.StatusFound)
 			return
 		}
@@ -466,7 +497,11 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		s.renderCallbackSuccess(w, info.Email)
 	} else {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"session_token": rawToken})
+		resp := map[string]string{"session_token": rawToken}
+		if llmKey != "" {
+			resp["llm_key"] = llmKey
+		}
+		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
 

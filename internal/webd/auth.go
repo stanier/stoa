@@ -18,7 +18,10 @@ func UserIDFromContext(ctx context.Context) string {
 	return v
 }
 
-const sessionCookie = "__session"
+const (
+	sessionCookie = "__session"
+	llmKeyCookie  = "__llm_key"
+)
 
 // startLogin initiates the browser auth flow by calling authd's /oauth/login
 // with a post_login_redirect pointing back to webd's /auth/callback.
@@ -77,18 +80,33 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store as an HttpOnly, SameSite=Lax cookie.
-	// SameSite=Lax (not Strict) so the cookie is sent on top-level navigations
-	// from the authd redirect, while still blocking cross-site request forgery.
+	secure := strings.HasPrefix(s.cfg.ExternalURL, "https")
+	maxAge := int((24 * time.Hour).Seconds())
+
+	// Store session token as an HttpOnly, SameSite=Lax cookie.
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   strings.HasPrefix(s.cfg.ExternalURL, "https"),
-		MaxAge:   int((24 * time.Hour).Seconds()),
+		Secure:   secure,
+		MaxAge:   maxAge,
 	})
+
+	// Store the per-user LLM key (provisioned by authd at login) in its own
+	// HttpOnly cookie. Injected into agentd SessionConfig at session creation.
+	if llmKey := r.URL.Query().Get("llm_key"); llmKey != "" {
+		http.SetCookie(w, &http.Cookie{
+			Name:     llmKeyCookie,
+			Value:    llmKey,
+			Path:     "/",
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			Secure:   secure,
+			MaxAge:   maxAge,
+		})
+	}
 
 	http.Redirect(w, r, "/", http.StatusFound)
 }
@@ -96,12 +114,14 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 // handleLogout clears the session cookie and redirects to the home page.
 // Requires POST to prevent logout CSRF via navigations (<a>, <img>, etc.).
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   -1,
+	})
+	http.SetCookie(w, &http.Cookie{
+		Name:     llmKeyCookie,
 		Path:     "/",
 		HttpOnly: true,
 		MaxAge:   -1,
@@ -183,6 +203,15 @@ func (s *Server) userIDFromToken(ctx context.Context, token string) string {
 // tokenFromCookie returns the authd session token from the session cookie, or "".
 func (s *Server) tokenFromCookie(r *http.Request) string {
 	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		return ""
+	}
+	return c.Value
+}
+
+// llmKeyFromCookie returns the per-user llmp_* key from the LLM key cookie, or "".
+func (s *Server) llmKeyFromCookie(r *http.Request) string {
+	c, err := r.Cookie(llmKeyCookie)
 	if err != nil {
 		return ""
 	}

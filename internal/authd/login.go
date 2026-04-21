@@ -21,6 +21,7 @@ type loginEntry struct {
 
 	// Set by the callback handler on success.
 	sessionToken string
+	llmKey       string // llmp_* key provisioned at login; empty if apikeyd unavailable
 	// Set by the callback handler on failure.
 	errMsg string
 }
@@ -64,9 +65,10 @@ func (ls *loginStore) get(id string) (*loginEntry, bool) {
 	return e, ok
 }
 
-// complete marks the login as done and deposits the session token.
+// complete marks the login as done and deposits the session token and LLM key.
 // Called by the OAuth callback after issuing a session.
-func (ls *loginStore) complete(id, sessionToken string) bool {
+// llmKey may be empty if apikeyd was unavailable at login time.
+func (ls *loginStore) complete(id, sessionToken, llmKey string) bool {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 	e, ok := ls.entries[id]
@@ -74,6 +76,7 @@ func (ls *loginStore) complete(id, sessionToken string) bool {
 		return false
 	}
 	e.sessionToken = sessionToken
+	e.llmKey = llmKey
 	return true
 }
 
@@ -90,27 +93,27 @@ func (ls *loginStore) fail(id, msg string) bool {
 }
 
 // consume retrieves and deletes a completed or failed entry.
-// Returns ("", "", false) when the login is still pending.
-func (ls *loginStore) consume(id string) (sessionToken, errMsg string, done bool) {
+// Returns ("", "", "", false) when the login is still pending.
+func (ls *loginStore) consume(id string) (sessionToken, llmKey, errMsg string, done bool) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 	e, ok := ls.entries[id]
 	if !ok {
-		return "", "unknown login_id", true
+		return "", "", "unknown login_id", true
 	}
 	if time.Now().After(e.expiresAt) {
 		delete(ls.entries, id)
-		return "", "login expired", true
+		return "", "", "login expired", true
 	}
 	if e.sessionToken != "" {
 		delete(ls.entries, id)
-		return e.sessionToken, "", true
+		return e.sessionToken, e.llmKey, "", true
 	}
 	if e.errMsg != "" {
 		delete(ls.entries, id)
-		return "", e.errMsg, true
+		return "", "", e.errMsg, true
 	}
-	return "", "", false
+	return "", "", "", false
 }
 
 func (ls *loginStore) reapLoop() {

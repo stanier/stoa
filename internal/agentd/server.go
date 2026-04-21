@@ -17,11 +17,9 @@ import (
 	"github.com/stanier/stoa/internal/config"
 	"github.com/stanier/stoa/internal/llm"
 	"github.com/stanier/stoa/internal/llm/cache"
-	"github.com/stanier/stoa/internal/llm/stats"
 	"github.com/stanier/stoa/internal/logging"
 	"github.com/stanier/stoa/internal/mcp"
 	"github.com/stanier/stoa/internal/prompts"
-	"github.com/stanier/stoa/internal/ratelimit"
 	"github.com/stanier/stoa/internal/skills"
 )
 
@@ -31,8 +29,7 @@ import (
 type Server struct {
 	cfg              *config.Config
 	llmClient        llm.Client
-	llmCache         *cache.MemoryCache  // non-nil when response caching is enabled
-	statsRegistry    *stats.Registry     // always non-nil; records per-provider health metrics
+	llmCache         *cache.MemoryCache // non-nil when response caching is enabled
 	providerRegistry *llm.ProviderRegistry
 	skillRegistry *skills.Registry
 	promptReg     *prompts.Registry
@@ -56,9 +53,6 @@ type Server struct {
 
 	// eventHooks contains optional callbacks invoked before each outbound WebSocket event.
 	eventHooks EventHooks
-
-	// rateLimiter enforces per-user request velocity limits when non-nil.
-	rateLimiter *ratelimit.Limiter
 
 	// agentDB is optional Postgres persistence for sessions and messages.
 	// When nil, falls back to filesystem (AGENTD_SESSION_DIR).
@@ -102,17 +96,16 @@ func NewServer(cfg *config.Config) (*Server, error) {
 
 	// Build multi-provider registry with background model discovery.
 	// Refresh interval: 30 minutes (0 = startup only, no repeating).
+	// Kept for per-session provider override (overrides.Provider); fallback chain
+	// and stats are now handled by llm-proxy.
 	providerReg := app.SetupProviderRegistry(cfg, context.Background(), 30*time.Minute)
 
-	// Create the stats registry for per-provider health metrics. It is always
-	// created so that the /metrics endpoint can be served safely. When no
-	// FallbackClient is used, the registry will remain empty (no samples recorded).
-	statsReg := stats.NewRegistry()
-
-	// If a fallback chain is configured, wrap the default client so that
-	// retryable errors automatically advance to the next provider.
+	// If a fallback chain is configured, wrap the default client.
+	// Note: rate limiting and stats are now in llm-proxy. FallbackClient here
+	// is only active when agentd is NOT routing through llm-proxy (e.g. direct
+	// provider access in dev mode).
 	if len(cfg.Gateway.FallbackChain) > 0 {
-		fc := llm.NewFallbackClient(providerReg, cfg.Gateway.FallbackChain, statsReg)
+		fc := llm.NewFallbackClient(providerReg, cfg.Gateway.FallbackChain)
 		if cfg.Gateway.DynamicRouting {
 			fc = fc.WithDynamicRouting(true)
 			logging.Infof("agentd: provider fallback chain (dynamic routing enabled): %v", cfg.Gateway.FallbackChain)
@@ -141,7 +134,6 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		cfg:              cfg,
 		llmClient:        llmClient,
 		llmCache:         llmCache,
-		statsRegistry:    statsReg,
 		providerRegistry: providerReg,
 		skillRegistry:    skillRegistry,
 		promptReg:        promptReg,
@@ -152,12 +144,6 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		acpRuns:          make(map[string]*ACPRun),
 		httpClient:       &http.Client{Timeout: 5 * time.Minute},
 		stopCh:           make(chan struct{}),
-	}
-
-	// Per-user request rate limiter (optional).
-	if cfg.Gateway.RateLimit.Enabled && cfg.Gateway.RateLimit.RequestsPerMinute > 0 {
-		s.rateLimiter = ratelimit.New(time.Minute, cfg.Gateway.RateLimit.RequestsPerMinute)
-		logging.Infof("agentd: rate limiting enabled (%d req/min per user)", cfg.Gateway.RateLimit.RequestsPerMinute)
 	}
 
 	// Background cleanup: remove completed/failed/cancelled runs older than 24h.
@@ -314,7 +300,7 @@ func (s *Server) loadPersistedSessions() {
 
 	count := 0
 	for _, ps := range persisted {
-		sess := newSession(ps.ID, ps.Persona, ps.Source, "", nil)
+		sess := newSession(ps.ID, ps.Persona, ps.Source, "", "", nil)
 		sess.createdAt = ps.CreatedAt
 		sess.lastInputTokens = ps.LastInputTokens
 		sess.totalOutputTokens = ps.TotalOutputTokens
@@ -404,7 +390,7 @@ func (s *Server) loadSessionsFromDB() {
 			continue
 		}
 
-		sess := newSession(ds.ID, ds.Persona, ds.Source, ds.UserID, nil)
+		sess := newSession(ds.ID, ds.Persona, ds.Source, ds.UserID, "", nil)
 		sess.createdAt = ds.CreatedAt
 		sess.lastInputTokens = ds.LastInputTokens
 		sess.totalOutputTokens = ds.TotalOutputTokens

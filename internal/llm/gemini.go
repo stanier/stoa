@@ -30,7 +30,8 @@ type GeminiClient struct {
 
 // NewGeminiClient creates a GeminiClient.
 // baseURL defaults to the Google AI Studio endpoint if empty.
-func NewGeminiClient(apiKey, baseURL, defaultModel string, maxTokens int) (*GeminiClient, error) {
+// httpClient may be nil to use a default client.
+func NewGeminiClient(apiKey, baseURL, defaultModel string, maxTokens int, httpClient *http.Client) (*GeminiClient, error) {
 	if baseURL == "" {
 		baseURL = defaultGeminiBaseURL
 	}
@@ -38,12 +39,15 @@ func NewGeminiClient(apiKey, baseURL, defaultModel string, maxTokens int) (*Gemi
 	if maxTokens <= 0 {
 		maxTokens = 4096
 	}
+	if httpClient == nil {
+		httpClient = &http.Client{}
+	}
 	return &GeminiClient{
 		baseURL:      baseURL,
 		apiKey:       apiKey,
 		defaultModel: defaultModel,
 		maxTokens:    maxTokens,
-		httpClient:   &http.Client{},
+		httpClient:   httpClient,
 	}, nil
 }
 

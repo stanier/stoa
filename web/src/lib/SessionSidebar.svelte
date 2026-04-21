@@ -425,7 +425,7 @@
           <button class="menu-item" onclick={() => { userMenuOpen = false; onAccount?.() }}>Account</button>
           <button class="menu-item" onclick={() => { userMenuOpen = false; onApiKeys?.() }}>API Keys</button>
           <button class="menu-item" onclick={() => { userMenuOpen = false; onAgents?.() }}>Agents</button>
-          <a class="menu-item" href="/auth/logout">Sign out</a>
+          <button class="menu-item" onclick={() => { fetch('/auth/logout', { method: 'POST' }).then(() => { window.location.href = '/' }) }}>Sign out</button>
         </div>
       {/if}
       <button class="user-btn" onclick={toggleUserMenu}>

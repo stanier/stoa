@@ -126,6 +126,12 @@ func (s *Server) handleSessionsProxy(w http.ResponseWriter, r *http.Request) {
 			}
 			body["user_id"] = userID
 
+			// Inject the per-user LLM key so agentd routes calls through llm-proxy
+			// with user-scoped quota enforcement.
+			if llmKey := s.llmKeyFromCookie(r); llmKey != "" {
+				body["llm_key"] = llmKey
+			}
+
 			// Apply the user's saved MCP prefs unless the caller already supplied
 			// an explicit allowed_tools list.
 			if _, alreadySet := body["allowed_tools"]; !alreadySet {

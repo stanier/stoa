@@ -24,13 +24,6 @@ func handleMessage(
 ) (string, string, int, int, error) {
 	logging.Infof("agentd: processing message (len=%d, session %s)", len(content), sess.id)
 
-	// Per-user request velocity check.
-	if s.rateLimiter != nil && sess.userID != "" {
-		if ok, reason := s.rateLimiter.Allow(sess.userID); !ok {
-			return "", "", 0, 0, fmt.Errorf("rate limit exceeded: %s", reason)
-		}
-	}
-
 	// Append user message.
 	sess.mu.Lock()
 	sess.messages = append(sess.messages, chat.NewUserMessage(content))
@@ -92,6 +85,18 @@ func runAgenticLoop(
 		}
 		overrides := sess.overrides
 		sess.mu.Unlock()
+
+		// Inject the per-user llmp_* key so llm-proxy enforces user-scoped quotas.
+		// The key is provisioned by authd at login and passed in via SessionConfig.
+		if sess.llmKey != "" {
+			if overrides == nil {
+				overrides = &llm.Overrides{}
+			} else {
+				cp := *overrides
+				overrides = &cp
+			}
+			overrides.APIKey = &sess.llmKey
+		}
 
 		// Attach per-session overrides so the LLM client picks them up.
 		callCtx := llm.WithOverrides(ctx, overrides)

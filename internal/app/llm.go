@@ -28,7 +28,7 @@ func SetupLLMClient(cfg *config.Config) llm.Client {
 	case "anthropic":
 		client, err = llm.NewAnthropicClient(cfg)
 	case "gemini":
-		client, err = llm.NewGeminiClient(cfg.LLM.APIKey, cfg.LLM.APIURL, cfg.LLM.Model, cfg.LLM.MaxTokens)
+		client, err = llm.NewGeminiClient(cfg.LLM.APIKey, cfg.LLM.APIURL, cfg.LLM.Model, cfg.LLM.MaxTokens, nil)
 	case "openai":
 		fallthrough // openai and any unrecognized provider use the OpenAI-compatible client
 	default:

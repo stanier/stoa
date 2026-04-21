@@ -12,6 +12,9 @@ const overridesKey contextKey = iota
 // Overrides holds per-session LLM parameter overrides.
 // A nil pointer means "use the global config value".
 type Overrides struct {
+	// APIKey overrides the API key used for this specific call.
+	// Set by agentd when routing through llm-proxy with a per-user llmp_* key.
+	APIKey *string `json:"api_key,omitempty"`
 	Temperature          *float64 `json:"temperature,omitempty"`
 	TopP                 *float64 `json:"top_p,omitempty"`
 	TopK                 *int     `json:"top_k,omitempty"`

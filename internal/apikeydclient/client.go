@@ -19,6 +19,17 @@ var (
 	ErrExpired      = errors.New("apikeydclient: API key has expired")
 )
 
+// ProvisionedKey is returned by ProvisionUserKey on success.
+// The raw Key is the llmp_* value — store it; it will not be returned again
+// for an existing key.
+type ProvisionedKey struct {
+	Key       string `json:"key"`
+	ID        string `json:"id"`
+	UserID    string `json:"user_id"`
+	Prefix    string `json:"prefix"`
+	CreatedAt string `json:"created_at"`
+}
+
 // KeyInfo is the metadata returned by a successful key verification.
 type KeyInfo struct {
 	KeyID     string     `json:"key_id"`
@@ -119,6 +130,35 @@ func (c *Client) verify(ctx context.Context, rawKey string) (*KeyInfo, error) {
 	default:
 		return nil, fmt.Errorf("apikeydclient: unexpected status %d", resp.StatusCode)
 	}
+}
+
+// ProvisionUserKey calls the admin endpoint to rotate (revoke-and-recreate) the
+// service key for userID. adminToken must match APIKEYD_ADMIN_TOKEN on the server.
+// The returned ProvisionedKey.Key is the raw llmp_* value — the caller must
+// cache it; subsequent calls for the same user will rotate the key.
+func (c *Client) ProvisionUserKey(ctx context.Context, userID, adminToken string) (*ProvisionedKey, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.baseURL+"/admin/users/"+userID+"/key", http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("apikeydclient: build provision request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("apikeydclient: provision request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("apikeydclient: provision failed with status %d", resp.StatusCode)
+	}
+
+	var pk ProvisionedKey
+	if err := json.NewDecoder(resp.Body).Decode(&pk); err != nil {
+		return nil, fmt.Errorf("apikeydclient: decode provision response: %w", err)
+	}
+	return &pk, nil
 }
 
 // InvalidateCache removes a cached entry for rawKey, forcing re-validation on the next call.

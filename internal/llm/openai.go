@@ -26,27 +26,36 @@ type OpenAIClient struct {
 // NewOpenAIClientSimple creates an OpenAI-compatible client with minimal parameters.
 // Useful for proxy and other lightweight consumers that don't have a full config.Config.
 // Per-request parameters (model, maxTokens, temperature, etc.) can be passed via
-// llm.Overrides in context.
-func NewOpenAIClientSimple(apiKey, apiURL, defaultModel string, defaultMaxTokens int) (*OpenAIClient, error) {
+// llm.Overrides in context. httpClient may be nil to use the SDK default.
+func NewOpenAIClientSimple(apiKey, apiURL, defaultModel string, defaultMaxTokens int, httpClient *http.Client) (*OpenAIClient, error) {
 	cfg := &config.Config{}
 	cfg.LLM.Provider = "openai"
 	cfg.LLM.APIKey = apiKey
 	cfg.LLM.APIURL = apiURL
 	cfg.LLM.Model = defaultModel
 	cfg.LLM.MaxTokens = defaultMaxTokens
-	return NewOpenAIClient(cfg)
+	return newOpenAIClientWithHTTP(cfg, httpClient)
 }
 
 // NewOpenAIClient creates a new OpenAI-compatible client
 func NewOpenAIClient(cfg *config.Config) (*OpenAIClient, error) {
+	return newOpenAIClientWithHTTP(cfg, nil)
+}
+
+func newOpenAIClientWithHTTP(cfg *config.Config, httpClient *http.Client) (*OpenAIClient, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is required")
 	}
 
-	client := openai.NewClient(
+	opts := []option.RequestOption{
 		option.WithAPIKey(cfg.LLM.APIKey),
 		option.WithBaseURL(cfg.LLM.APIURL),
-	)
+	}
+	if httpClient != nil {
+		opts = append(opts, option.WithHTTPClient(httpClient))
+	}
+
+	client := openai.NewClient(opts...)
 
 	return &OpenAIClient{
 		client:          client,
@@ -458,6 +467,9 @@ func (c *OpenAIClient) StreamMessage(ctx context.Context, messages []chat.Messag
 			}
 			return resp, err
 		}))
+	}
+	if ov := OverridesFromContext(ctx); ov != nil && ov.APIKey != nil {
+		streamOpts = append(streamOpts, option.WithAPIKey(*ov.APIKey))
 	}
 
 	// Create streaming completion

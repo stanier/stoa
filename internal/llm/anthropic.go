@@ -21,32 +21,37 @@ type AnthropicClient struct {
 
 // NewAnthropicClientSimple creates an Anthropic client with minimal parameters.
 // Useful for proxy and other lightweight consumers that don't have a full config.Config.
-func NewAnthropicClientSimple(apiKey, apiURL, defaultModel string, defaultMaxTokens int) (*AnthropicClient, error) {
+// httpClient may be nil to use the SDK default.
+func NewAnthropicClientSimple(apiKey, apiURL, defaultModel string, defaultMaxTokens int, httpClient *http.Client) (*AnthropicClient, error) {
 	cfg := &config.Config{}
 	cfg.LLM.Provider = "anthropic"
 	cfg.LLM.APIKey = apiKey
 	cfg.LLM.APIURL = apiURL
 	cfg.LLM.Model = defaultModel
 	cfg.LLM.MaxTokens = defaultMaxTokens
-	return NewAnthropicClient(cfg)
+	return newAnthropicClientWithHTTP(cfg, httpClient)
 }
 
 // NewAnthropicClient creates a new Anthropic client
 func NewAnthropicClient(cfg *config.Config) (*AnthropicClient, error) {
+	return newAnthropicClientWithHTTP(cfg, nil)
+}
+
+func newAnthropicClientWithHTTP(cfg *config.Config, httpClient *http.Client) (*AnthropicClient, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is required")
 	}
 
-	// Build client options
 	opts := []option.RequestOption{
 		option.WithAPIKey(cfg.LLM.APIKey),
 	}
 
-	// Add custom base URL if provided and different from Anthropic default
-	// The Anthropic SDK defaults to "https://api.anthropic.com" if not specified
 	const defaultAnthropicURL = "https://api.anthropic.com"
 	if cfg.LLM.APIURL != "" && cfg.LLM.APIURL != defaultAnthropicURL {
 		opts = append(opts, option.WithBaseURL(cfg.LLM.APIURL))
+	}
+	if httpClient != nil {
+		opts = append(opts, option.WithHTTPClient(httpClient))
 	}
 
 	client := anthropic.NewClient(opts...)
@@ -169,10 +174,13 @@ func (c *AnthropicClient) SendMessage(ctx context.Context, messages []chat.Messa
 		params.Metadata = anthropic.MetadataParam{UserID: anthropic.String(ov.AnthropicUserID)}
 	}
 
-	// Forward anthropic-beta header if present in overrides.
+	// Forward anthropic-beta header and per-call API key if present in overrides.
 	sendOpts := []option.RequestOption{}
 	if ov != nil && ov.AnthropicBeta != "" {
 		sendOpts = append(sendOpts, option.WithHeader("anthropic-beta", ov.AnthropicBeta))
+	}
+	if ov != nil && ov.APIKey != nil {
+		sendOpts = append(sendOpts, option.WithAPIKey(*ov.APIKey))
 	}
 
 	// Create message
@@ -339,6 +347,9 @@ func (c *AnthropicClient) StreamMessage(ctx context.Context, messages []chat.Mes
 	streamOpts := []option.RequestOption{}
 	if o != nil && o.AnthropicBeta != "" {
 		streamOpts = append(streamOpts, option.WithHeader("anthropic-beta", o.AnthropicBeta))
+	}
+	if o != nil && o.APIKey != nil {
+		streamOpts = append(streamOpts, option.WithAPIKey(*o.APIKey))
 	}
 
 	// Capture upstream HTTP response headers (e.g. rate-limit headers) via

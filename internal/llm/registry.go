@@ -73,7 +73,7 @@ func (r *ProviderRegistry) registerFromLLMConfig(name string, cfg *config.Config
 	case "anthropic":
 		client, err = NewAnthropicClient(cfg)
 	case "gemini":
-		client, err = NewGeminiClient(cfg.LLM.APIKey, cfg.LLM.APIURL, cfg.LLM.Model, cfg.LLM.MaxTokens)
+		client, err = NewGeminiClient(cfg.LLM.APIKey, cfg.LLM.APIURL, cfg.LLM.Model, cfg.LLM.MaxTokens, nil)
 	default:
 		client, err = NewOpenAIClient(cfg)
 	}
@@ -124,7 +124,7 @@ func (r *ProviderRegistry) registerFromProviderConfig(pc config.LLMProviderConfi
 	case "anthropic":
 		client, err = NewAnthropicClient(&derived)
 	case "gemini":
-		client, err = NewGeminiClient(derived.LLM.APIKey, derived.LLM.APIURL, derived.LLM.Model, derived.LLM.MaxTokens)
+		client, err = NewGeminiClient(derived.LLM.APIKey, derived.LLM.APIURL, derived.LLM.Model, derived.LLM.MaxTokens, nil)
 	default:
 		client, err = NewOpenAIClient(&derived)
 	}
