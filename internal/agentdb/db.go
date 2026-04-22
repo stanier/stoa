@@ -15,6 +15,10 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// RequiredSchemaVersion is the goose migration version this binary expects.
+// Bump this constant each time a new migration file is added.
+const RequiredSchemaVersion = 10
+
 // DB wraps a pgxpool.Pool with typed methods for the agentd schema.
 type DB struct {
 	pool *pgxpool.Pool
@@ -22,15 +26,17 @@ type DB struct {
 
 // Open creates a new DB from the given Postgres DSN.
 func Open(ctx context.Context, dsn string) (*DB, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	pool, err := dbutil.OpenPool(ctx, dsn)
 	if err != nil {
-		return nil, fmt.Errorf("agentdb: open pool: %w", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("agentdb: ping: %w", err)
+		return nil, fmt.Errorf("agentdb: %w", err)
 	}
 	return &DB{pool: pool}, nil
+}
+
+// CheckSchemaVersion verifies the database is at the expected migration version.
+// Call this at agentd startup before the server begins accepting requests.
+func CheckSchemaVersion(ctx context.Context, dsn string) error {
+	return dbutil.CheckSchemaVersion(ctx, dsn, RequiredSchemaVersion)
 }
 
 // Close releases pool connections.

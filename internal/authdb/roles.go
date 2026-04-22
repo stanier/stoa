@@ -3,6 +3,7 @@ package authdb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -117,7 +118,7 @@ func (db *DB) GetUserRole(ctx context.Context, userID string) (*UserRole, error)
 		WHERE ur.user_id = $1`,
 		userID,
 	).Scan(&ur.RoleID, &ur.RoleName, &ur.Persona, &toolsJSON, &ur.AssignedAt)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {

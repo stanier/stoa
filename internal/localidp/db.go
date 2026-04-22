@@ -5,9 +5,8 @@ import (
 	"embed"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	dbutil "github.com/stanier/stoa/internal/db"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 //go:embed migrations/*.sql
@@ -19,13 +18,9 @@ type db struct {
 }
 
 func openDB(ctx context.Context, dsn string) (*db, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	pool, err := dbutil.OpenPool(ctx, dsn)
 	if err != nil {
-		return nil, fmt.Errorf("localidp: open pool: %w", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("localidp: ping: %w", err)
+		return nil, fmt.Errorf("localidp: %w", err)
 	}
 	return &db{pool: pool}, nil
 }

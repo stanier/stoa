@@ -2,6 +2,7 @@ package authdb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -48,7 +49,7 @@ func (db *DB) GetUser(ctx context.Context, userID string) (*User, error) {
 	err := db.pool.QueryRow(ctx, q, userID).Scan(
 		&u.ID, &u.ProviderID, &u.Sub, &u.Email, &u.DisplayName, &u.CreatedAt, &u.LastSeenAt,
 	)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
