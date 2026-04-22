@@ -30,6 +30,9 @@ func handleMessage(
 	sess.mu.Unlock()
 	_ = sess.tracer.LogUserMessage(content)
 
+	// Fire title generation before the LLM call so the title appears sooner.
+	s.maybeGenerateTitle(sess, sendEvent)
+
 	ctx, cancel := context.WithTimeout(context.Background(), agenticLoopTimeout)
 	defer cancel()
 
@@ -261,9 +264,6 @@ func runAgenticLoop(
 
 	// Persist session state after each turn (and after any auto-compaction).
 	s.persistSession(sess)
-
-	// Fire async title generation (no-op when titling is disabled).
-	s.maybeGenerateTitle(sess)
 
 	return finalResponse, finalThinking, lastInputTokens, totalOutputTokens, nil
 }

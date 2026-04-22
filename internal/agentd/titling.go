@@ -6,6 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/stanier/stoa/internal/agentproto"
 	"github.com/stanier/stoa/internal/chat"
 	"github.com/stanier/stoa/internal/llm"
 	"github.com/stanier/stoa/internal/logging"
@@ -16,30 +17,29 @@ Given a conversation, respond with a title of at most 6 words that captures the 
 Output only the title — no quotes, no punctuation at the end, no explanation.`
 
 // maybeGenerateTitle fires off an async title generation if titling is enabled
-// and there is enough content (at least one user + one assistant turn).
-func (s *Server) maybeGenerateTitle(sess *Session) {
+// and there is at least one user turn. sendEvent is called with the generated
+// title so the client can update its UI without polling.
+func (s *Server) maybeGenerateTitle(sess *Session, sendEvent func(agentproto.Event)) {
 	if s.cfg == nil || !s.cfg.Titling.Enabled {
 		return
 	}
 	logging.Infof("agentd: titling: queuing title generation for session %s", sess.id)
 
-	// Snapshot messages quickly.
+	// Snapshot messages and per-user key quickly.
 	sess.mu.Lock()
 	msgs := make([]chat.Message, len(sess.messages))
 	copy(msgs, sess.messages)
+	llmKey := sess.llmKey
 	sess.mu.Unlock()
 
-	// Need at least one user message and one assistant message beyond the system prompt.
-	userCount, assistantCount := 0, 0
+	// Need at least one user message beyond the system prompt.
+	userCount := 0
 	for _, m := range msgs {
-		switch m.Role {
-		case "user":
+		if m.Role == "user" {
 			userCount++
-		case "assistant":
-			assistantCount++
 		}
 	}
-	if userCount == 0 || assistantCount == 0 {
+	if userCount == 0 {
 		return
 	}
 
@@ -47,7 +47,7 @@ func (s *Server) maybeGenerateTitle(sess *Session) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 
-		title := s.generateTitle(ctx, msgs)
+		title := s.generateTitle(ctx, msgs, llmKey)
 		if title == "" {
 			return
 		}
@@ -63,18 +63,38 @@ func (s *Server) maybeGenerateTitle(sess *Session) {
 			}
 		}
 		logging.Infof("agentd: titling: session %s → %q", sess.id, title)
+
+		// Push title to the client so it can update without polling.
+		if sendEvent != nil {
+			sendEvent(agentproto.Event{
+				Type:      agentproto.EventTypeTitle,
+				SessionID: sess.id,
+				Title:     &agentproto.TitleEvent{Title: title},
+			})
+		}
 	}()
 }
 
 // generateTitle calls the configured titling model with the conversation and
 // returns a cleaned title string, or "" on failure.
-func (s *Server) generateTitle(ctx context.Context, msgs []chat.Message) string {
+func (s *Server) generateTitle(ctx context.Context, msgs []chat.Message, llmKey string) string {
 	cfg := s.cfg.Titling
+
+	// Strip unresolved shell-style placeholders (e.g. "${TITLING_PROVIDER}") that
+	// can appear when a compose/config file contains unexpanded env var references.
+	provider := cfg.Provider
+	if strings.HasPrefix(provider, "${") {
+		provider = ""
+	}
+	model := cfg.Model
+	if strings.HasPrefix(model, "${") {
+		model = ""
+	}
 
 	// Select client.
 	var client llm.Client
-	if cfg.Provider != "" && s.providerRegistry != nil {
-		if c, ok := s.providerRegistry.GetClient(cfg.Provider); ok {
+	if provider != "" && s.providerRegistry != nil {
+		if c, ok := s.providerRegistry.GetClient(provider); ok {
 			client = c
 		}
 	}
@@ -124,19 +144,22 @@ func (s *Server) generateTitle(ctx context.Context, msgs []chat.Message) string 
 
 	// Apply overrides: model (if configured), and always disable thinking so a
 	// fast summarisation model doesn't burn tokens on reasoning.
-	thinkingEnabled := true
-	thinkingBudget := 0
+	thinkingDisabled := false
 	overrides := &llm.Overrides{
-		EnableThinking:       &thinkingEnabled,
-		ThinkingBudgetTokens: &thinkingBudget,
+		EnableThinking: &thinkingDisabled,
 	}
-	if cfg.Model != "" {
-		model := cfg.Model
+	if model == "" {
+		model = s.cfg.LLM.Model
+	}
+	if model != "" {
 		overrides.Model = &model
+	}
+	if llmKey != "" {
+		overrides.APIKey = &llmKey
 	}
 	callCtx := llm.WithOverrides(ctx, overrides)
 
-	logging.Infof("agentd: titling: calling model (provider=%q model=%q msgs=%d)", cfg.Provider, cfg.Model, len(titlingMsgs))
+	logging.Infof("agentd: titling: calling model (provider=%q model=%q msgs=%d)", provider, model, len(titlingMsgs))
 	response, err := client.SendMessage(callCtx, titlingMsgs, nil)
 	if err != nil {
 		logging.Warnf("agentd: titling: model error: %v", err)

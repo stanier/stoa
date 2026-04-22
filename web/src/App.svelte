@@ -166,7 +166,7 @@
       />
     {:else if activeId}
       {#key activeId}
-        <Chat {user} sessionId={activeId} sessionTitle={sessions.find(s => s.id === activeId)?.title ?? ''} onSessionEnd={loadSessions} />
+        <Chat {user} sessionId={activeId} sessionTitle={sessions.find(s => s.id === activeId)?.title ?? ''} onSessionEnd={loadSessions} onTitleUpdate={loadSessions} />
       {/key}
     {/if}
   </div>

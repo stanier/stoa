@@ -18,6 +18,7 @@ const (
 	EventTypeError          EventType = "error"
 	EventTypeAgentSpawned   EventType = "agent_spawned"
 	EventTypeAgentCompleted EventType = "agent_completed"
+	EventTypeTitle          EventType = "title"
 )
 
 // Event is the server→client message. Exactly one of the payload fields is non-nil.
@@ -34,6 +35,7 @@ type Event struct {
 	Error          *ErrorEvent          `json:"error,omitempty"`
 	AgentSpawned   *AgentSpawnedEvent   `json:"agent_spawned,omitempty"`
 	AgentCompleted *AgentCompletedEvent `json:"agent_completed,omitempty"`
+	Title          *TitleEvent          `json:"title,omitempty"`
 }
 
 // ChunkEvent carries an incremental piece of the assistant's response during streaming.
@@ -114,4 +116,9 @@ type AgentCompletedEvent struct {
 	AgentID string `json:"agent_id"`
 	IsError bool   `json:"is_error,omitempty"`
 	Result  string `json:"result"`
+}
+
+// TitleEvent notifies the client that a session title has been generated or updated.
+type TitleEvent struct {
+	Title string `json:"title"`
 }

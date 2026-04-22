@@ -11,7 +11,12 @@
   // sessionId and onSessionEnd are passed in from App — Chat no longer owns
   // session creation. {#key activeId} in App remounts Chat on session switch,
   // so state is naturally reset.
-  let { user, sessionId, sessionTitle = '', onSessionEnd } = $props()
+  let { user, sessionId, sessionTitle = '', onSessionEnd, onTitleUpdate } = $props()
+
+  // Tracks a server-pushed title that arrives via the 'title' WebSocket event.
+  // Falls back to the sessionTitle prop (from the sessions list fetch on load).
+  let liveTitle = $state(sessionTitle)
+  $effect(() => { liveTitle = sessionTitle })
 
   // ── Message model ─────────────────────────────────────────────────────────────
   // Each item in `messages` is one of:
@@ -157,6 +162,14 @@
           messages = messages
         }
         scrollToBottom()
+        break
+      }
+
+      case 'title': {
+        if (ev.title?.title) {
+          liveTitle = ev.title.title
+          onTitleUpdate?.(sessionId, ev.title.title)
+        }
         break
       }
 
@@ -593,8 +606,8 @@
 <div class="outer">
 <div class="layout">
   <header>
-    {#if sessionTitle}
-      <span class="session-title">{sessionTitle}</span>
+    {#if liveTitle}
+      <span class="session-title">{liveTitle}</span>
     {/if}
     <div class="header-right">
       <button class="gear" class:active={toolsOpen}
