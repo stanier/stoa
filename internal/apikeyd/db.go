@@ -17,6 +17,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
+
+	dbutil "github.com/stanier/stoa/internal/db"
 )
 
 //go:embed migrations/*.sql
@@ -63,17 +65,13 @@ func (k *KeyRecord) IsActive() bool {
 
 // Open connects to Postgres, runs any pending goose migrations, and returns a DB.
 func Open(ctx context.Context, dsn string) (*DB, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	pool, err := dbutil.OpenPool(ctx, dsn)
 	if err != nil {
-		return nil, fmt.Errorf("apikeyd: connect: %w", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("apikeyd: ping: %w", err)
+		return nil, fmt.Errorf("apikeyd: %w", err)
 	}
 
-	db := stdlib.OpenDBFromPool(pool)
-	if err := runMigrations(db); err != nil {
+	sqlDB := stdlib.OpenDBFromPool(pool)
+	if err := runMigrations(sqlDB); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("apikeyd: migrate: %w", err)
 	}

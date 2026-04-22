@@ -33,8 +33,8 @@
 
 <style>
   .usage-card {
-    background: #1a1d27;
-    border: 1px solid #2d3148;
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: 10px;
     padding: 1.5rem;
     margin-bottom: 1.5rem;
@@ -46,33 +46,22 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.07em;
-    color: #64748b;
+    color: var(--text3);
     margin-bottom: 1rem;
   }
 
-  .period {
-    margin-bottom: 1rem;
-  }
+  .period { margin-bottom: 1rem; }
 
   .period-label {
     font-size: 0.72rem;
-    color: #475569;
+    color: var(--text4);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     margin-bottom: 0.5rem;
   }
 
-  .token-rows {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-
-  .token-row {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
+  .token-rows { display: flex; flex-direction: column; gap: 0.4rem; }
+  .token-row { display: flex; flex-direction: column; gap: 0.2rem; }
 
   .token-label-line {
     display: flex;
@@ -80,51 +69,24 @@
     align-items: baseline;
   }
 
-  .token-label {
-    font-size: 0.78rem;
-    color: #64748b;
-  }
+  .token-label { font-size: 0.78rem; color: var(--text3); }
+  .token-value { font-size: 0.85rem; color: var(--text); font-variant-numeric: tabular-nums; }
 
-  .token-value {
-    font-size: 0.85rem;
-    color: #e2e8f0;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .bar-track {
-    height: 4px;
-    background: #2d3148;
-    border-radius: 2px;
-    overflow: hidden;
-  }
-
+  .bar-track { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
   .bar-fill {
-    height: 100%;
-    background: #6366f1;
-    border-radius: 2px;
-    transition: width 0.3s ease;
+    height: 100%; background: var(--accent);
+    border-radius: 2px; transition: width 0.3s ease;
   }
+  .bar-fill.over { background: #f87171; }
 
-  .bar-fill.over {
-    background: #f87171;
-  }
+  .divider { border: none; border-top: 1px solid var(--border); margin: 1rem 0; }
 
-  .divider {
-    border: none;
-    border-top: 1px solid #2d3148;
-    margin: 1rem 0;
-  }
-
-  .unavailable {
-    font-size: 0.82rem;
-    color: #475569;
-    font-style: italic;
-  }
+  .unavailable { font-size: 0.82rem; color: var(--text3); font-style: italic; }
 
   .spinner {
     width: 18px; height: 18px;
-    border: 2px solid #2d3148;
-    border-top-color: #6366f1;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.7s linear infinite;
     margin: 0.25rem 0;

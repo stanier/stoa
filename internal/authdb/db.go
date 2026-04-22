@@ -8,7 +8,6 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pressly/goose/v3"
 
 	dbutil "github.com/stanier/stoa/internal/db"
 )
@@ -28,13 +27,9 @@ type DB struct {
 // Open creates a new DB using the given Postgres connection string.
 // The connection is verified with a Ping before returning.
 func Open(ctx context.Context, dsn string) (*DB, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	pool, err := dbutil.OpenPool(ctx, dsn)
 	if err != nil {
-		return nil, fmt.Errorf("authdb: open pool: %w", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("authdb: ping: %w", err)
+		return nil, fmt.Errorf("authdb: %w", err)
 	}
 	return &DB{pool: pool}, nil
 }
@@ -44,34 +39,10 @@ func (db *DB) Close() {
 	db.pool.Close()
 }
 
-// CheckSchemaVersion queries the goose_db_version table and returns an error
-// if the current version does not exactly match RequiredSchemaVersion.
-// This should be called at agentd startup before the server begins accepting requests.
+// CheckSchemaVersion verifies the database is at the expected migration version.
+// Call this at authd startup before the server begins accepting requests.
 func CheckSchemaVersion(ctx context.Context, dsn string) error {
-	sqlDB, err := dbutil.OpenSQLDB(dsn)
-	if err != nil {
-		return fmt.Errorf("authdb: schema check: %w", err)
-	}
-	defer sqlDB.Close()
-
-	current, err := goose.GetDBVersionContext(ctx, sqlDB)
-	if err != nil {
-		return fmt.Errorf("authdb: failed to read schema version: %w", err)
-	}
-
-	if current < RequiredSchemaVersion {
-		return fmt.Errorf(
-			"database schema is at version %d, binary requires %d — run: auth-admin authd migrate up",
-			current, RequiredSchemaVersion,
-		)
-	}
-	if current > RequiredSchemaVersion {
-		return fmt.Errorf(
-			"database schema is at version %d, which is newer than this binary supports (%d) — upgrade agentd",
-			current, RequiredSchemaVersion,
-		)
-	}
-	return nil
+	return dbutil.CheckSchemaVersion(ctx, dsn, RequiredSchemaVersion)
 }
 
 // Migrate runs all pending goose migrations against the given DSN using the

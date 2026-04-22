@@ -95,7 +95,7 @@ func (d *db) Authenticate(ctx context.Context, username, password string) (*Loca
 		&user.ID, &user.Username, &user.Email, &user.DisplayName, &user.CreatedAt,
 		&passwordHash, &failedAttempts, &lockedAt,
 	)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrUserNotFound
 	}
 	if err != nil {

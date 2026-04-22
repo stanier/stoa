@@ -211,8 +211,8 @@
     flex: 1;
     padding: 2rem;
     overflow-y: auto;
-    background: #1a1a1a;
-    color: #e0e0e0;
+    background: var(--bg);
+    color: var(--text);
   }
 
   .header {
@@ -222,205 +222,129 @@
     margin-bottom: 0.5rem;
   }
 
-  h2 { margin: 0; font-size: 1.25rem; flex: 1; }
+  h2 { margin: 0; font-size: 1.25rem; flex: 1; color: var(--text); }
 
   .back-btn {
-    background: none;
-    border: none;
-    color: #888;
-    cursor: pointer;
-    font-size: 0.9rem;
-    padding: 0.25rem 0.5rem;
+    background: none; border: none; color: var(--text3);
+    cursor: pointer; font-size: 0.9rem; padding: 0.25rem 0.5rem;
+    transition: color 0.15s;
   }
-  .back-btn:hover { color: #ccc; }
+  .back-btn:hover { color: var(--text); }
 
   .create-btn {
-    background: #2563eb;
-    color: #fff;
-    border: none;
-    border-radius: 6px;
-    padding: 0.4rem 0.9rem;
-    cursor: pointer;
-    font-size: 0.85rem;
+    background: var(--accent); color: var(--bg); border: none;
+    border-radius: 6px; padding: 0.4rem 0.9rem;
+    cursor: pointer; font-size: 0.85rem; transition: background 0.15s;
   }
-  .create-btn:hover { background: #1d4ed8; }
+  .create-btn:hover { background: var(--accent-light); }
 
-  .hint {
-    color: #888;
-    font-size: 0.85rem;
-    margin: 0 0 1.5rem;
-  }
+  .hint { color: var(--text3); font-size: 0.85rem; margin: 0 0 1.5rem; }
 
   .error-bar {
-    background: #3b0a0a;
-    color: #f87171;
-    padding: 0.6rem 1rem;
-    border-radius: 6px;
-    margin-bottom: 1rem;
-    font-size: 0.85rem;
+    background: #3b0a0a; color: #f87171;
+    padding: 0.6rem 1rem; border-radius: 6px;
+    margin-bottom: 1rem; font-size: 0.85rem;
   }
 
   .reveal-box {
-    background: #0f2a1a;
-    border: 1px solid #166534;
-    border-radius: 8px;
-    padding: 1rem 1.25rem;
-    margin-bottom: 1.5rem;
+    background: var(--depth); border: 1px solid #166534;
+    border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.5rem;
   }
   .reveal-label { font-size: 0.85rem; color: #86efac; margin-bottom: 0.5rem; }
   .reveal-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
   .reveal-key {
-    flex: 1;
-    font-family: monospace;
-    font-size: 0.85rem;
-    background: #0a1f12;
-    padding: 0.4rem 0.75rem;
-    border-radius: 4px;
-    word-break: break-all;
+    flex: 1; font-family: monospace; font-size: 0.85rem;
+    background: var(--depth); color: #86efac;
+    padding: 0.4rem 0.75rem; border-radius: 4px; word-break: break-all;
   }
   .copy-btn {
-    background: #166534;
-    color: #86efac;
-    border: none;
-    border-radius: 4px;
-    padding: 0.35rem 0.75rem;
-    cursor: pointer;
-    font-size: 0.8rem;
-    white-space: nowrap;
+    background: #166534; color: #86efac; border: none;
+    border-radius: 4px; padding: 0.35rem 0.75rem;
+    cursor: pointer; font-size: 0.8rem; white-space: nowrap;
   }
   .copy-btn:hover { background: #15803d; }
   .dismiss-btn {
-    background: none;
-    border: none;
-    color: #6b7280;
-    cursor: pointer;
-    font-size: 0.8rem;
-    padding: 0;
+    background: none; border: none; color: var(--text3);
+    cursor: pointer; font-size: 0.8rem; padding: 0; transition: color 0.15s;
   }
-  .dismiss-btn:hover { color: #9ca3af; }
+  .dismiss-btn:hover { color: var(--text2); }
 
-  .loading, .empty {
-    color: #6b7280;
-    padding: 2rem 0;
-    text-align: center;
-  }
+  .loading, .empty { color: var(--text3); padding: 2rem 0; text-align: center; }
 
-  .keys-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.875rem;
-  }
+  .keys-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
   .keys-table th {
-    text-align: left;
-    color: #6b7280;
-    font-weight: 500;
-    padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid #2a2a2a;
+    text-align: left; color: var(--text3); font-weight: 500;
+    padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border);
   }
   .keys-table td {
-    padding: 0.6rem 0.75rem;
-    border-bottom: 1px solid #222;
-    vertical-align: middle;
+    padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--depth);
+    vertical-align: middle; color: var(--text2);
   }
   .keys-table tr.revoked td { opacity: 0.45; }
 
   .prefix {
-    font-family: monospace;
-    font-size: 0.8rem;
-    background: #2a2a2a;
-    padding: 0.15rem 0.4rem;
-    border-radius: 3px;
+    font-family: monospace; font-size: 0.8rem;
+    background: var(--surface-hi); color: var(--text2);
+    padding: 0.15rem 0.4rem; border-radius: 3px;
   }
 
   .revoke-btn {
-    background: none;
-    border: 1px solid #4b1c1c;
-    color: #f87171;
-    border-radius: 4px;
-    padding: 0.2rem 0.6rem;
-    cursor: pointer;
-    font-size: 0.8rem;
+    background: none; border: 1px solid #4b1c1c;
+    color: #f87171; border-radius: 4px;
+    padding: 0.2rem 0.6rem; cursor: pointer; font-size: 0.8rem;
   }
   .revoke-btn:hover { background: #3b0a0a; }
 
-  .revoked-label { color: #4b5563; font-size: 0.8rem; }
+  .revoked-label { color: var(--text4); font-size: 0.8rem; }
 
-  /* Modals */
   .modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 100;
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: flex; align-items: center; justify-content: center; z-index: 100;
   }
   .modal {
-    background: #222;
-    border: 1px solid #333;
-    border-radius: 10px;
-    padding: 1.5rem;
-    width: 380px;
-    max-width: 90vw;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1.5rem; width: 380px; max-width: 90vw;
   }
-  .modal h3 { margin: 0 0 1rem; font-size: 1rem; }
-  .modal p  { font-size: 0.875rem; color: #aaa; margin: 0 0 1.25rem; }
+  .modal h3 { margin: 0 0 1rem; font-size: 1rem; color: var(--text); }
+  .modal p  { font-size: 0.875rem; color: var(--text2); margin: 0 0 1.25rem; }
 
   label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    font-size: 0.85rem;
-    color: #aaa;
-    margin-bottom: 1rem;
+    display: flex; flex-direction: column; gap: 0.35rem;
+    font-size: 0.85rem; color: var(--text2); margin-bottom: 1rem;
   }
   label input {
-    background: #2a2a2a;
-    border: 1px solid #3a3a3a;
-    border-radius: 6px;
-    color: #e0e0e0;
-    padding: 0.5rem 0.75rem;
-    font-size: 0.875rem;
-    outline: none;
+    background: var(--depth); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text);
+    padding: 0.5rem 0.75rem; font-size: 0.875rem; outline: none;
+    transition: border-color 0.15s;
   }
-  label input:focus { border-color: #2563eb; }
+  label input:focus { border-color: var(--accent); }
 
   .required { color: #f87171; }
-  .optional { color: #6b7280; font-size: 0.75rem; }
+  .optional { color: var(--text4); font-size: 0.75rem; }
 
   .modal-btns { display: flex; gap: 0.75rem; justify-content: flex-end; }
 
   .cancel-btn {
-    background: #2a2a2a;
-    border: 1px solid #3a3a3a;
-    color: #aaa;
-    border-radius: 6px;
-    padding: 0.4rem 1rem;
-    cursor: pointer;
-    font-size: 0.875rem;
+    background: var(--surface-hi); border: 1px solid var(--border);
+    color: var(--text2); border-radius: 6px;
+    padding: 0.4rem 1rem; cursor: pointer; font-size: 0.875rem;
+    transition: background 0.15s;
   }
-  .cancel-btn:hover { background: #333; }
+  .cancel-btn:hover { background: var(--hover); }
 
   .confirm-btn {
-    background: #2563eb;
-    border: none;
-    color: #fff;
-    border-radius: 6px;
-    padding: 0.4rem 1rem;
-    cursor: pointer;
-    font-size: 0.875rem;
+    background: var(--accent); border: none; color: var(--bg);
+    border-radius: 6px; padding: 0.4rem 1rem;
+    cursor: pointer; font-size: 0.875rem; transition: background 0.15s;
   }
-  .confirm-btn:hover:not(:disabled) { background: #1d4ed8; }
+  .confirm-btn:hover:not(:disabled) { background: var(--accent-light); }
   .confirm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .danger-btn {
-    background: #991b1b;
-    border: none;
-    color: #fff;
-    border-radius: 6px;
-    padding: 0.4rem 1rem;
-    cursor: pointer;
-    font-size: 0.875rem;
+    background: #991b1b; border: none; color: #fff;
+    border-radius: 6px; padding: 0.4rem 1rem;
+    cursor: pointer; font-size: 0.875rem;
   }
   .danger-btn:hover:not(:disabled) { background: #7f1d1d; }
   .danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }

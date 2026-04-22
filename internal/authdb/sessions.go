@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -65,7 +66,7 @@ func (db *DB) ValidateSession(ctx context.Context, rawToken string) (*Session, e
 	err := db.pool.QueryRow(ctx, q, hash).Scan(
 		&s.TokenHash, &s.UserID, &s.CreatedAt, &s.ExpiresAt, &s.LastSeenAt,
 	)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		// Distinguish expired from never-existed by checking without the expiry filter.
 		var exists bool
 		_ = db.pool.QueryRow(ctx,

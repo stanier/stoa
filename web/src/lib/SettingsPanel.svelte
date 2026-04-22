@@ -1,12 +1,11 @@
 <script>
   let { sessionId, open = $bindable(false) } = $props()
 
-  // ── State ──────────────────────────────────────────────────────────────────
   let config    = $state({})
   let dirty     = $state(false)
   let saving    = $state(false)
   let saved     = $state(false)
-  let providers = $state([]) // [{ name, models: [string] }]
+  let providers = $state([])
 
   $effect(() => {
     if (open && sessionId) {
@@ -15,18 +14,11 @@
     }
   })
 
-  // ── Derived ────────────────────────────────────────────────────────────────
-
-  // Models for the currently selected provider (or all models if none selected).
   let availableModels = $derived(() => {
-    if (!config.provider) {
-      return providers.flatMap(p => p.models)
-    }
+    if (!config.provider) return providers.flatMap(p => p.models)
     const p = providers.find(p => p.name === config.provider)
     return p ? p.models : []
   })
-
-  // ── API ────────────────────────────────────────────────────────────────────
 
   async function loadConfig() {
     try {
@@ -71,16 +63,12 @@
     }
   }
 
-  function reset() {
-    config = {}
-    dirty = true
-  }
-
+  function reset() { config = {}; dirty = true }
   function mark() { dirty = true; saved = false }
 
   function onProviderChange(e) {
     config.provider = e.target.value || null
-    config.model = null   // clear model when provider changes
+    config.model = null
     mark()
   }
 
@@ -88,8 +76,6 @@
     config.model = e.target.value || null
     mark()
   }
-
-  // ── Helpers ────────────────────────────────────────────────────────────────
 
   function asFloat(val) {
     const n = parseFloat(val)
@@ -103,10 +89,10 @@
 
 <style>
   .panel {
-    width: 260px;
-    flex-shrink: 0;
-    background: #13161f;
-    border-left: 1px solid #2d3148;
+    position: absolute;
+    inset: 0;
+    height: 100%;
+    background: var(--sidebar);
     display: flex;
     flex-direction: column;
     overflow-y: auto;
@@ -117,7 +103,6 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.65rem 0.75rem;
-    border-bottom: 1px solid #2d3148;
     flex-shrink: 0;
   }
   .panel-title {
@@ -125,94 +110,85 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: #475569;
+    color: var(--text4);
   }
   button.close {
-    background: none; border: none; color: #475569; cursor: pointer;
+    background: none; border: none; color: var(--text4); cursor: pointer;
     font-size: 1rem; padding: 0; line-height: 1;
+    transition: color 0.15s;
   }
-  button.close:hover { color: #e2e8f0; }
+  button.close:hover { color: var(--text); }
 
   .fields { padding: 0.75rem; display: flex; flex-direction: column; gap: 1rem; }
 
   .field { display: flex; flex-direction: column; gap: 0.3rem; }
   .field label {
-    font-size: 0.72rem; color: #64748b;
+    font-size: 0.72rem; color: var(--text3);
     display: flex; justify-content: space-between; align-items: center;
   }
-  .field label span { color: #94a3b8; font-family: monospace; }
+  .field label span { color: var(--text2); font-family: monospace; }
 
-  input[type=range] {
-    width: 100%; accent-color: #6366f1; cursor: pointer;
-  }
+  input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
   input[type=number] {
-    width: 100%; background: #0f1117; border: 1px solid #2d3148;
-    border-radius: 5px; color: #e2e8f0; font-size: 0.85rem;
+    width: 100%; background: var(--depth); border: 1px solid var(--border);
+    border-radius: 5px; color: var(--text); font-size: 0.85rem;
     padding: 0.35rem 0.5rem; outline: none;
     transition: border-color 0.15s;
   }
-  input[type=number]:focus { border-color: #6366f1; }
+  input[type=number]:focus { border-color: var(--accent); }
 
   select {
-    width: 100%; background: #0f1117; border: 1px solid #2d3148;
-    border-radius: 5px; color: #e2e8f0; font-size: 0.82rem;
+    width: 100%; background: var(--depth); border: 1px solid var(--border);
+    border-radius: 5px; color: var(--text); font-size: 0.82rem;
     padding: 0.35rem 0.5rem; outline: none; cursor: pointer;
-    transition: border-color 0.15s;
-    appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%2364748b' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+    transition: border-color 0.15s; appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%236b6560' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 0.5rem center;
     padding-right: 1.75rem;
   }
-  select:focus { border-color: #6366f1; }
+  select:focus { border-color: var(--accent); }
 
-  .toggle-row {
-    display: flex; align-items: center; justify-content: space-between;
-  }
-  .toggle-label { font-size: 0.8rem; color: #94a3b8; }
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; }
+  .toggle-label { font-size: 0.8rem; color: var(--text2); }
 
-  /* Toggle switch */
   .switch { position: relative; width: 36px; height: 20px; flex-shrink: 0; }
   .switch input { opacity: 0; width: 0; height: 0; }
   .slider {
-    position: absolute; inset: 0; background: #2d3148; border-radius: 20px;
+    position: absolute; inset: 0; background: var(--border); border-radius: 20px;
     cursor: pointer; transition: background 0.2s;
   }
   .slider::before {
     content: ''; position: absolute; width: 14px; height: 14px;
-    left: 3px; top: 3px; background: #64748b; border-radius: 50%;
+    left: 3px; top: 3px; background: var(--text3); border-radius: 50%;
     transition: transform 0.2s, background 0.2s;
   }
-  input:checked + .slider { background: #6366f1; }
-  input:checked + .slider::before { transform: translateX(16px); background: #fff; }
+  input:checked + .slider { background: var(--accent); }
+  input:checked + .slider::before { transform: translateX(16px); background: var(--bg); }
 
-  .divider {
-    border: none; border-top: 1px solid #2d3148; margin: 0;
-  }
+  .divider { border: none; border-top: 1px solid var(--border); margin: 0; }
 
-  .hint { font-size: 0.7rem; color: #334155; line-height: 1.4; }
+  .hint { font-size: 0.7rem; color: var(--text4); line-height: 1.4; }
 
   .footer {
-    padding: 0.75rem; display: flex; gap: 0.5rem;
-    border-top: 1px solid #2d3148; flex-shrink: 0;
+    padding: 0.75rem; display: flex; gap: 0.5rem; flex-shrink: 0;
   }
   button.save-btn {
-    flex: 1; background: #6366f1; color: #fff; border: none;
+    flex: 1; background: var(--accent); color: var(--bg); border: none;
     border-radius: 6px; font-size: 0.8rem; font-weight: 500;
     padding: 0.45rem; cursor: pointer; transition: background 0.15s;
   }
-  button.save-btn:hover:not(:disabled) { background: #4f46e5; }
+  button.save-btn:hover:not(:disabled) { background: var(--accent-light); }
   button.save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  button.save-btn.ok { background: #166534; }
+  button.save-btn.ok { background: #166534; color: #fff; }
   button.reset-btn {
-    background: none; border: 1px solid #2d3148; color: #64748b;
+    background: none; border: 1px solid var(--border); color: var(--text3);
     border-radius: 6px; font-size: 0.8rem; padding: 0.45rem 0.65rem;
     cursor: pointer; transition: color 0.15s, border-color 0.15s;
   }
-  button.reset-btn:hover { color: #e2e8f0; border-color: #475569; }
+  button.reset-btn:hover { color: var(--text); border-color: var(--text4); }
 </style>
 
-{#if open}
 <div class="panel">
   <div class="panel-header">
     <span class="panel-title">Model &amp; Params</span>
@@ -221,7 +197,6 @@
 
   <div class="fields">
 
-    <!-- Provider selection -->
     {#if providers.length > 0}
       <div class="field">
         <label>Provider</label>
@@ -233,7 +208,6 @@
         </select>
       </div>
 
-      <!-- Model selection -->
       <div class="field">
         <label>Model</label>
         <select value={config.model ?? ''} onchange={onModelChange}>
@@ -247,7 +221,6 @@
       <hr class="divider" />
     {/if}
 
-    <!-- Temperature -->
     <div class="field">
       <label>
         Temperature
@@ -259,7 +232,6 @@
       />
     </div>
 
-    <!-- Top-P -->
     <div class="field">
       <label>
         Top-P
@@ -271,7 +243,6 @@
       />
     </div>
 
-    <!-- Max tokens -->
     <div class="field">
       <label>Max tokens</label>
       <input type="number" min="1" max="200000" step="256"
@@ -281,9 +252,8 @@
       />
     </div>
 
-    <!-- Top-K (Anthropic) -->
     <div class="field">
-      <label>Top-K <span style="font-size:0.65rem;color:#334155">(Anthropic)</span></label>
+      <label>Top-K <span style="font-size:0.65rem;color:var(--text5)">(Anthropic)</span></label>
       <input type="number" min="1" max="2048" step="1"
         value={config.top_k ?? ''}
         placeholder="default"
@@ -293,9 +263,8 @@
 
     <hr class="divider" />
 
-    <!-- Enable thinking -->
     <div class="toggle-row">
-      <span class="toggle-label">Extended thinking <span style="font-size:0.65rem;color:#334155">(Anthropic)</span></span>
+      <span class="toggle-label">Extended thinking <span style="font-size:0.65rem;color:var(--text5)">(Anthropic)</span></span>
       <label class="switch">
         <input type="checkbox"
           checked={config.enable_thinking ?? false}
@@ -331,4 +300,3 @@
     </button>
   </div>
 </div>
-{/if}

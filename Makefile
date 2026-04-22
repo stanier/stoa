@@ -47,11 +47,18 @@ $(foreach b,$(BINARIES),$(eval $(call BINARY_TEMPLATE,$(b))))
 
 ##@ Debug builds (bin/debug/ — with symbols)
 
-.PHONY: build build-mcp-all dev run
+.PHONY: build build-mcp-all build-web dev run
 
 build: $(addprefix build-,$(BINARIES)) ## Build all binaries  (individual: build-<name>, see list-binaries)
 
 build-mcp-all: $(addprefix build-,$(MCP_SERVERS)) ## Build all MCP server binaries
+
+build-web: ## Build Svelte frontend into internal/webd/dist/ (required before build-webd)
+	cd web && npm run build
+
+# wire web build as a prerequisite for both debug and dist webd targets
+build-webd: build-web
+dist-webd: build-web
 
 dev: ## Build chat with race detector
 	mkdir -p $(DEBUG_DIR)
