@@ -14,6 +14,8 @@ go.work.sum
 # Root-level config files (may contain API keys)
 config.yaml
 .env
+.env.*
+!.env.example
 
 # Service config files contain environment-specific URLs and settings.
 # Commit only the .example.yaml templates; keep live configs local.
@@ -57,6 +59,23 @@ hooks
 node_modules/
 web/node_modules/
 
+# Frontend build output (generated from web/src/ — rebuild with: make build-web)
+internal/webd/dist/
+web/dist/
+
+# TLS certificates
+*.pem
+*.key
+*.crt
+*.cert
+
+# Go test coverage
+coverage/
+coverage.html
+
+# Temporary working directory
+tmp/
+
 # Docker
 data/
 *.log
@@ -67,3 +86,6 @@ traces/
 docker-compose.override.yml
 docker-compose.*.yml
 !docker-compose.yml
+
+# Temporary build/project docs
+scratch/
