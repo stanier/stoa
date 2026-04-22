@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/stanier/stoa/internal/agentd"
 	"github.com/stanier/stoa/internal/config"
@@ -113,7 +115,9 @@ func main() {
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	<-sigCh
 
-	logging.Info("agentd: shutting down")
+	logging.Info("agentd: shutting down, draining active connections (60s)")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	_ = httpSrv.Shutdown(shutdownCtx)
 	srv.Stop()
-	_ = httpSrv.Close()
 }

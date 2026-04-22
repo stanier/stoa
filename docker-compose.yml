@@ -343,6 +343,37 @@ services:
       retries: 6
 
   # ---------------------------------------------------------------------------
+  # nginx — reverse proxy / load balancer
+  # Public-facing entry point. Routes /sessions/* to agentd (sticky by URI
+  # hash), everything else to webd. agentd and webd no longer bind host ports.
+  # ---------------------------------------------------------------------------
+
+  nginx:
+    image: nginx:1.30.0-alpine
+    container_name: stoa-nginx
+    ports:
+      - "8090:8080"
+    volumes:
+      - ./config/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      agentd:
+        condition: service_healthy
+      webd:
+        condition: service_started
+    networks:
+      - agent-external
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+
+  # ---------------------------------------------------------------------------
   # agentd — LLM/MCP/tool daemon
   # Reaches authd for token validation. No DB access. No path to local-idp.
   # ---------------------------------------------------------------------------
@@ -355,8 +386,6 @@ services:
     container_name: stoa-agentd
     mem_limit: 512m
     memswap_limit: 512m
-    ports:
-      - "7777:7777"
     environment:
       # LLM provider
       LLM_PROVIDER: ${LLM_PROVIDER}
@@ -413,6 +442,12 @@ services:
         condition: service_healthy
       postgres-agentd:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7777/acp/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
     secrets:
       - anthropic_api_key
       - openai_api_key
@@ -438,8 +473,6 @@ services:
     container_name: stoa-webd
     mem_limit: 128m
     memswap_limit: 128m
-    ports:
-      - "3000:3000"
     environment:
       WEBD_EXTERNAL_URL: ${WEBD_EXTERNAL_URL}
       WEBD_AUTHD_URL: http://authd:8888
@@ -453,7 +486,7 @@ services:
       authd:
         condition: service_healthy
       agentd:
-        condition: service_started
+        condition: service_healthy
     networks:
       - agent-external
     restart: unless-stopped
