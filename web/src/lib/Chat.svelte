@@ -31,18 +31,29 @@
     openWS()
   })
 
-  const ATTACH_PREFIX = '[Attachments — use mcp_filesystem_read_file to read them]\n'
+  // S3 mode sends presigned URLs; local fallback sends filesystem paths.
+  const ATTACH_PREFIX_URL  = '[Attachments — use mcp_fetch to read them]\n'
+  const ATTACH_PREFIX_PATH = '[Attachments — use mcp_filesystem_read_file to read them]\n'
 
   function parseUserContent(content) {
-    if (!content.startsWith(ATTACH_PREFIX)) return { text: content, attachments: [] }
-    const rest = content.slice(ATTACH_PREFIX.length)
+    const isUrl  = content.startsWith(ATTACH_PREFIX_URL)
+    const isPath = content.startsWith(ATTACH_PREFIX_PATH)
+    if (!isUrl && !isPath) return { text: content, attachments: [] }
+
+    const prefix = isUrl ? ATTACH_PREFIX_URL : ATTACH_PREFIX_PATH
+    const rest = content.slice(prefix.length)
     const lines = rest.split('\n')
     const attachments = []
     let textStart = 0
     for (let i = 0; i < lines.length; i++) {
-      const m = lines[i].match(/^- (.+?) \(path: (.+?), size: (.+?)\)$/)
+      const m = lines[i].match(/^- (.+?) \((url|path): (.+?), size: (.+?)\)$/)
       if (m) {
-        attachments.push({ name: m[1], path: m[2], size: m[3] })
+        attachments.push({
+          name: m[1],
+          url:  m[2] === 'url'  ? m[3] : undefined,
+          path: m[2] === 'path' ? m[3] : undefined,
+          size: m[4],
+        })
         textStart = i + 1
       } else {
         break
@@ -244,7 +255,7 @@
         const res = await fetch('/api/upload', { method: 'POST', body: form })
         if (!res.ok) { error = `Upload failed: ${file.name}`; continue }
         const data = await res.json()
-        pendingFiles = [...pendingFiles, { name: data.name, path: data.path, size: data.size }]
+        pendingFiles = [...pendingFiles, { name: data.name, url: data.url, path: data.path, size: data.size }]
       } catch (e) {
         error = `Upload error: ${file.name}`
       }
@@ -252,8 +263,9 @@
     uploading = false
   }
 
-  function removeFile(path) {
-    pendingFiles = pendingFiles.filter(f => f.path !== path)
+  function removeFile(f) {
+    const key = f.url || f.path
+    pendingFiles = pendingFiles.filter(pf => (pf.url || pf.path) !== key)
   }
 
   function fmtSize(bytes) {
@@ -268,17 +280,21 @@
     input = ''
 
     let content = text
+    let sentAttachments = []
     if (pendingFiles.length) {
-      const refs = pendingFiles.map(f =>
-        `- ${f.name} (path: ${f.path}, size: ${fmtSize(f.size)})`
-      ).join('\n')
-      const prefix = `[Attachments — use mcp_filesystem_read_file to read them]\n${refs}`
-      content = text ? `${prefix}\n\n${text}` : prefix
+      sentAttachments = [...pendingFiles]
+      const hasUrl = pendingFiles.some(f => f.url)
+      const prefix = hasUrl ? ATTACH_PREFIX_URL : ATTACH_PREFIX_PATH
+      const refs = pendingFiles.map(f => {
+        const refType = f.url ? 'url' : 'path'
+        const ref     = f.url || f.path
+        return `- ${f.name} (${refType}: ${ref}, size: ${fmtSize(f.size)})`
+      }).join('\n')
+      content = text ? `${prefix}${refs}\n\n${text}` : `${prefix}${refs}`
       pendingFiles = []
     }
 
-    const sentAttachments = pendingFiles.length ? [...pendingFiles] : []
-    messages = [...messages, { kind: 'user', content: text || '', attachments: sentAttachments.map(f => ({ name: f.name, path: f.path, size: fmtSize(f.size) })) }]
+    messages = [...messages, { kind: 'user', content: text || '', attachments: sentAttachments.map(f => ({ name: f.name, url: f.url, path: f.path, size: fmtSize(f.size) })) }]
     scrollToBottom()
     ws.send(JSON.stringify({ type: 'send_message', send_message: { content } }))
     onSessionEnd?.()
@@ -669,11 +685,11 @@
 
   {#if pendingFiles.length}
     <div class="pending-files">
-      {#each pendingFiles as f (f.path)}
+      {#each pendingFiles as f ((f.url || f.path))}
         <div class="file-pill">
           <span class="fname">{f.name}</span>
           <span class="fsize">{fmtSize(f.size)}</span>
-          <button onclick={() => removeFile(f.path)}>✕</button>
+          <button onclick={() => removeFile(f)}>✕</button>
         </div>
       {/each}
     </div>

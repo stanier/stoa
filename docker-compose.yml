@@ -462,6 +462,52 @@ services:
       - no-new-privileges:true
 
   # ---------------------------------------------------------------------------
+  # garage — S3-compatible object storage (file uploads)
+  # ---------------------------------------------------------------------------
+
+  garage:
+    image: dxflrs/garage:v2.3.0
+    container_name: stoa-garage
+    volumes:
+      - ./config/garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    environment:
+      GARAGE_ALLOW_WORLD_READABLE_SECRETS: "true"
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN}
+    networks:
+      - agent-external
+    restart: unless-stopped
+    # No healthcheck: the scratch-based image has no shell or HTTP tools available.
+    # garage-init (below) polls the admin HTTP API and is the real readiness gate.
+
+  # One-shot init: creates layout, bucket, and access key on first boot.
+  # Built from alpine:3.20 + the garage binary (copied from the garage image) so
+  # the init script can use the garage CLI over RPC without needing the admin HTTP API.
+  # restart: on-failure retries until garage's RPC port is ready.
+  garage-init:
+    image: garage-init:local
+    build:
+      context: .
+      dockerfile: Dockerfile.garage-init
+    container_name: stoa-garage-init
+    volumes:
+      - ./scripts/garage-init.sh:/garage-init.sh:ro
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN}
+      GARAGE_BUCKET: ${GARAGE_BUCKET}
+      GARAGE_ACCESS_KEY_ID: ${GARAGE_ACCESS_KEY_ID}
+      GARAGE_SECRET_ACCESS_KEY: ${GARAGE_SECRET_ACCESS_KEY}
+    entrypoint: ["/bin/sh", "/garage-init.sh"]
+    networks:
+      - agent-external
+    restart: on-failure
+    depends_on:
+      - garage
+
+  # ---------------------------------------------------------------------------
   # webd — web UI BFF (serves Svelte SPA, cookie auth, WebSocket proxy)
   # ---------------------------------------------------------------------------
 
@@ -478,9 +524,11 @@ services:
       WEBD_AUTHD_URL: http://authd:8888
       WEBD_AGENTD_URL: http://agentd:7777
       WEBD_APIKEYD_URL: http://apikeyd:8889
-      WEBD_UPLOAD_DIR: /tmp/mcp-workspace/web-uploads
-    volumes:
-      - mcp-workspace:/tmp/mcp-workspace
+      WEBD_S3_ENDPOINT: http://garage:3900
+      WEBD_S3_REGION: garage
+      WEBD_S3_BUCKET: ${GARAGE_BUCKET}
+      WEBD_S3_ACCESS_KEY_ID: ${GARAGE_ACCESS_KEY_ID}
+      WEBD_S3_SECRET_ACCESS_KEY: ${GARAGE_SECRET_ACCESS_KEY}
     depends_on:
       authd:
         condition: service_healthy
@@ -827,3 +875,5 @@ volumes:
   mcp-workspace:
   mcp-shell-workspace:
   squid-cache:
+  garage-meta:
+  garage-data:

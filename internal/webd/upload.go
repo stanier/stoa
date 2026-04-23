@@ -1,6 +1,7 @@
 package webd
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -10,6 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 const (
@@ -18,15 +22,18 @@ const (
 )
 
 // UploadResult is returned to the browser after a successful upload.
+// URL is a presigned S3 GET URL when S3 is configured; Path is set
+// only in local-filesystem fallback mode (dev/single-node).
 type UploadResult struct {
-	Path string `json:"path"` // absolute path inside the container (accessible to MCP tools)
-	Name string `json:"name"` // original filename
-	Size int64  `json:"size"` // bytes
+	URL  string `json:"url,omitempty"`  // presigned S3 URL (S3 mode)
+	Path string `json:"path,omitempty"` // local filesystem path (fallback mode)
+	Name string `json:"name"`
+	Size int64  `json:"size"`
 }
 
 // handleUpload handles POST /api/upload (multipart/form-data, field "file").
-// Saves the file to the configured upload directory and returns metadata the
-// client embeds as a reference in the message content.
+// In S3 mode: stores the object in S3 and returns a presigned GET URL.
+// In fallback mode: saves to the local upload directory and returns a path.
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -51,52 +58,91 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uploadDir := s.uploadDir()
-	if err := os.MkdirAll(uploadDir, 0755); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	// Prefix filename with a random token to avoid collisions and path traversal.
-	safeName := sanitizeFilename(header.Filename)
 	token, err := randomPrefix()
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	destName := token + "_" + safeName
-	destPath := filepath.Join(uploadDir, destName)
+	safeName := sanitizeFilename(header.Filename)
+	objectKey := token + "_" + safeName
 
-	dst, err := os.Create(destPath)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	defer dst.Close()
+	var result UploadResult
+	result.Name = header.Filename
 
-	written, err := io.Copy(dst, file)
-	if err != nil {
-		os.Remove(destPath)
-		http.Error(w, "upload failed", http.StatusInternalServerError)
-		return
+	if s.s3 != nil {
+		url, written, err := s.uploadToS3(r, objectKey, file, header.Size)
+		if err != nil {
+			http.Error(w, "upload failed", http.StatusInternalServerError)
+			return
+		}
+		result.URL = url
+		result.Size = written
+	} else {
+		path, written, err := s.uploadToFilesystem(objectKey, file)
+		if err != nil {
+			http.Error(w, "upload failed", http.StatusInternalServerError)
+			return
+		}
+		result.Path = path
+		result.Size = written
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(UploadResult{
-		Path: destPath,
-		Name: header.Filename,
-		Size: written,
-	})
+	_ = json.NewEncoder(w).Encode(result)
 }
 
-// uploadDir returns the directory where uploaded files are saved.
-func (s *Server) uploadDir() string {
-	base := envOr("WEBD_UPLOAD_DIR", "/tmp/mcp-workspace/"+uploadSubDir)
-	return base
+// uploadToS3 streams the file to S3 and returns a presigned GET URL.
+func (s *Server) uploadToS3(r *http.Request, key string, file io.Reader, size int64) (url string, written int64, err error) {
+	// Buffer the body so we have a known Content-Length for PutObject.
+	buf, err := io.ReadAll(io.LimitReader(file, maxUploadSize+1))
+	if err != nil {
+		return "", 0, err
+	}
+	written = int64(len(buf))
+
+	_, err = s.s3.client.PutObject(r.Context(), &s3.PutObjectInput{
+		Bucket:        aws.String(s.s3.cfg.Bucket),
+		Key:           aws.String(key),
+		Body:          bytes.NewReader(buf),
+		ContentLength: aws.Int64(written),
+	})
+	if err != nil {
+		return "", 0, fmt.Errorf("s3 put: %w", err)
+	}
+
+	presigned, err := s.s3.presign.PresignGetObject(r.Context(), &s3.GetObjectInput{
+		Bucket: aws.String(s.s3.cfg.Bucket),
+		Key:    aws.String(key),
+	}, s3.WithPresignExpires(s.s3.cfg.PresignTTL))
+	if err != nil {
+		return "", 0, fmt.Errorf("s3 presign: %w", err)
+	}
+
+	return presigned.URL, written, nil
+}
+
+// uploadToFilesystem saves the file locally — dev/single-node fallback only.
+func (s *Server) uploadToFilesystem(name string, file io.Reader) (path string, written int64, err error) {
+	dir := envOr("WEBD_UPLOAD_DIR", "/tmp/mcp-workspace/"+uploadSubDir)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", 0, err
+	}
+	destPath := filepath.Join(dir, name)
+	dst, err := os.Create(destPath)
+	if err != nil {
+		return "", 0, err
+	}
+	defer dst.Close()
+
+	n, err := io.Copy(dst, file)
+	if err != nil {
+		os.Remove(destPath)
+		return "", 0, err
+	}
+	return destPath, n, nil
 }
 
 func sanitizeFilename(name string) string {
-	// Keep only the base name, replace spaces, strip dangerous chars.
 	name = filepath.Base(name)
 	name = strings.ReplaceAll(name, " ", "_")
 	var safe strings.Builder
