@@ -1,7 +1,6 @@
 package webd
 
 import (
-	"fmt"
 	"os"
 	"strings"
 )
@@ -27,10 +26,6 @@ type Config struct {
 	// APIKeydURL is the internal URL of the apikeyd service.
 	// e.g. "http://apikeyd:8889". When empty, /api/apikeys returns 503.
 	APIKeydURL string
-
-	// CookieSecret is used to sign session cookies. Must be non-empty in production.
-	// Generate with: openssl rand -hex 32
-	CookieSecret string
 }
 
 // LoadConfig reads webd configuration from environment variables.
@@ -39,16 +34,12 @@ func LoadConfig() (*Config, error) {
 		Port:         envOr("WEBD_PORT", "3000"),
 		AuthdURL:     strings.TrimRight(envOr("WEBD_AUTHD_URL", "http://authd:8888"), "/"),
 		AgentdURL:    strings.TrimRight(envOr("WEBD_AGENTD_URL", "http://agentd:7777"), "/"),
-		APIKeydURL:   strings.TrimRight(envOr("WEBD_APIKEYD_URL", "http://apikeyd:8889"), "/"),
-		ExternalURL:  strings.TrimRight(os.Getenv("WEBD_EXTERNAL_URL"), "/"),
-		CookieSecret: os.Getenv("WEBD_COOKIE_SECRET"),
+		APIKeydURL:  strings.TrimRight(envOr("WEBD_APIKEYD_URL", "http://apikeyd:8889"), "/"),
+		ExternalURL: strings.TrimRight(os.Getenv("WEBD_EXTERNAL_URL"), "/"),
 	}
 
 	if cfg.ExternalURL == "" {
 		cfg.ExternalURL = "http://localhost:" + cfg.Port
-	}
-	if cfg.CookieSecret == "" {
-		return nil, fmt.Errorf("webd: WEBD_COOKIE_SECRET is required")
 	}
 
 	return cfg, nil

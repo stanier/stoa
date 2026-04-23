@@ -27,7 +27,6 @@ func main() {
 		fmt.Println("  WEBD_EXTERNAL_URL      — public URL browsers reach webd at")
 		fmt.Println("  WEBD_AUTHD_URL         — internal authd URL (default: http://authd:8888)")
 		fmt.Println("  WEBD_AGENTD_URL        — internal agentd URL (default: http://agentd:7777)")
-		fmt.Println("  WEBD_COOKIE_SECRET     — signing secret for session cookies (required)")
 		os.Exit(0)
 	}
 

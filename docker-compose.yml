@@ -478,7 +478,6 @@ services:
       WEBD_AUTHD_URL: http://authd:8888
       WEBD_AGENTD_URL: http://agentd:7777
       WEBD_APIKEYD_URL: http://apikeyd:8889
-      WEBD_COOKIE_SECRET: ${WEBD_COOKIE_SECRET}
       WEBD_UPLOAD_DIR: /tmp/mcp-workspace/web-uploads
     volumes:
       - mcp-workspace:/tmp/mcp-workspace
