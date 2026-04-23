@@ -31,28 +31,28 @@
     openWS()
   })
 
-  // S3 mode sends presigned URLs; local fallback sends filesystem paths.
-  const ATTACH_PREFIX_URL  = '[Attachments — use mcp_fetch to read them]\n'
+  // S3 mode: agent calls read_attachment(attachment_id); local fallback uses filesystem path.
+  const ATTACH_PREFIX_ID   = '[Attachments — use read_attachment to read them]\n'
   const ATTACH_PREFIX_PATH = '[Attachments — use mcp_filesystem_read_file to read them]\n'
 
   function parseUserContent(content) {
-    const isUrl  = content.startsWith(ATTACH_PREFIX_URL)
+    const isId   = content.startsWith(ATTACH_PREFIX_ID)
     const isPath = content.startsWith(ATTACH_PREFIX_PATH)
-    if (!isUrl && !isPath) return { text: content, attachments: [] }
+    if (!isId && !isPath) return { text: content, attachments: [] }
 
-    const prefix = isUrl ? ATTACH_PREFIX_URL : ATTACH_PREFIX_PATH
+    const prefix = isId ? ATTACH_PREFIX_ID : ATTACH_PREFIX_PATH
     const rest = content.slice(prefix.length)
     const lines = rest.split('\n')
     const attachments = []
     let textStart = 0
     for (let i = 0; i < lines.length; i++) {
-      const m = lines[i].match(/^- (.+?) \((url|path): (.+?), size: (.+?)\)$/)
+      const m = lines[i].match(/^- (.+?) \((attachment|path): (.+?), size: (.+?)\)$/)
       if (m) {
         attachments.push({
-          name: m[1],
-          url:  m[2] === 'url'  ? m[3] : undefined,
-          path: m[2] === 'path' ? m[3] : undefined,
-          size: m[4],
+          name:         m[1],
+          attachmentId: m[2] === 'attachment' ? m[3] : undefined,
+          path:         m[2] === 'path'       ? m[3] : undefined,
+          size:         m[4],
         })
         textStart = i + 1
       } else {
@@ -255,7 +255,7 @@
         const res = await fetch('/api/upload', { method: 'POST', body: form })
         if (!res.ok) { error = `Upload failed: ${file.name}`; continue }
         const data = await res.json()
-        pendingFiles = [...pendingFiles, { name: data.name, url: data.url, path: data.path, size: data.size }]
+        pendingFiles = [...pendingFiles, { name: data.name, attachmentId: data.attachment_id, path: data.path, size: data.size }]
       } catch (e) {
         error = `Upload error: ${file.name}`
       }
@@ -264,8 +264,8 @@
   }
 
   function removeFile(f) {
-    const key = f.url || f.path
-    pendingFiles = pendingFiles.filter(pf => (pf.url || pf.path) !== key)
+    const key = f.attachmentId || f.path
+    pendingFiles = pendingFiles.filter(pf => (pf.attachmentId || pf.path) !== key)
   }
 
   function fmtSize(bytes) {
@@ -283,18 +283,18 @@
     let sentAttachments = []
     if (pendingFiles.length) {
       sentAttachments = [...pendingFiles]
-      const hasUrl = pendingFiles.some(f => f.url)
-      const prefix = hasUrl ? ATTACH_PREFIX_URL : ATTACH_PREFIX_PATH
+      const hasId = pendingFiles.some(f => f.attachmentId)
+      const prefix = hasId ? ATTACH_PREFIX_ID : ATTACH_PREFIX_PATH
       const refs = pendingFiles.map(f => {
-        const refType = f.url ? 'url' : 'path'
-        const ref     = f.url || f.path
+        const refType = f.attachmentId ? 'attachment' : 'path'
+        const ref     = f.attachmentId || f.path
         return `- ${f.name} (${refType}: ${ref}, size: ${fmtSize(f.size)})`
       }).join('\n')
       content = text ? `${prefix}${refs}\n\n${text}` : `${prefix}${refs}`
       pendingFiles = []
     }
 
-    messages = [...messages, { kind: 'user', content: text || '', attachments: sentAttachments.map(f => ({ name: f.name, url: f.url, path: f.path, size: fmtSize(f.size) })) }]
+    messages = [...messages, { kind: 'user', content: text || '', attachments: sentAttachments.map(f => ({ name: f.name, attachmentId: f.attachmentId, path: f.path, size: fmtSize(f.size) })) }]
     scrollToBottom()
     ws.send(JSON.stringify({ type: 'send_message', send_message: { content } }))
     onSessionEnd?.()
@@ -685,7 +685,7 @@
 
   {#if pendingFiles.length}
     <div class="pending-files">
-      {#each pendingFiles as f ((f.url || f.path))}
+      {#each pendingFiles as f ((f.attachmentId || f.path))}
         <div class="file-pill">
           <span class="fname">{f.name}</span>
           <span class="fsize">{fmtSize(f.size)}</span>

@@ -425,6 +425,14 @@ services:
       # Session persistence
       AGENTD_SESSION_DIR: /app/sessions
 
+      # Attachment secret and S3 credentials — passed through to mcp-attachments containers.
+      ATTACHMENT_SECRET: ${ATTACHMENT_SECRET}
+      GARAGE_S3_ENDPOINT: http://garage:3900
+      GARAGE_S3_REGION: garage
+      GARAGE_S3_BUCKET: ${GARAGE_BUCKET}
+      GARAGE_S3_ACCESS_KEY_ID: ${GARAGE_ACCESS_KEY_ID}
+      GARAGE_S3_SECRET_ACCESS_KEY: ${GARAGE_SECRET_ACCESS_KEY}
+
       # Squid proxy
       AGENTD_SQUID_CONF_PATH: /app/squid/squid.conf
       MCP_PROXY_ADDRESS: "http://stoa-squid:3128"
@@ -529,6 +537,7 @@ services:
       WEBD_S3_BUCKET: ${GARAGE_BUCKET}
       WEBD_S3_ACCESS_KEY_ID: ${GARAGE_ACCESS_KEY_ID}
       WEBD_S3_SECRET_ACCESS_KEY: ${GARAGE_SECRET_ACCESS_KEY}
+      ATTACHMENT_SECRET: ${ATTACHMENT_SECRET}
     depends_on:
       authd:
         condition: service_healthy

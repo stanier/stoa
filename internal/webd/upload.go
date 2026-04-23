@@ -2,8 +2,11 @@ package webd
 
 import (
 	"bytes"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,12 +25,13 @@ const (
 )
 
 // UploadResult is returned to the browser after a successful upload.
-// URL is a presigned S3 GET URL when S3 is configured; Path is set
-// only in local-filesystem fallback mode (dev/single-node).
+// AttachmentID is an opaque HMAC-signed token (S3 mode) that the agent passes
+// to the read_attachment MCP tool — the agent never sees a URL or S3 key.
+// Path is set only in local-filesystem fallback mode (dev/single-node).
 type UploadResult struct {
-	URL  string `json:"url,omitempty"`  // presigned S3 URL (S3 mode)
-	Path string `json:"path,omitempty"` // local filesystem path (fallback mode)
-	Name string `json:"name"`
+	AttachmentID string `json:"attachment_id,omitempty"` // opaque token (S3 mode)
+	Path         string `json:"path,omitempty"`          // local filesystem path (fallback mode)
+	Name         string `json:"name"`
 	Size int64  `json:"size"`
 }
 
@@ -70,12 +74,12 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	result.Name = header.Filename
 
 	if s.s3 != nil {
-		url, written, err := s.uploadToS3(r, objectKey, file, header.Size)
+		attachmentID, written, err := s.uploadToS3(r, objectKey, file, header.Size)
 		if err != nil {
 			http.Error(w, "upload failed", http.StatusInternalServerError)
 			return
 		}
-		result.URL = url
+		result.AttachmentID = attachmentID
 		result.Size = written
 	} else {
 		path, written, err := s.uploadToFilesystem(objectKey, file)
@@ -91,9 +95,10 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(result)
 }
 
-// uploadToS3 streams the file to S3 and returns a presigned GET URL.
-func (s *Server) uploadToS3(r *http.Request, key string, file io.Reader, size int64) (url string, written int64, err error) {
-	// Buffer the body so we have a known Content-Length for PutObject.
+// uploadToS3 stores the file in S3 and returns an opaque HMAC-signed attachment ID.
+// The ID encodes the S3 key and a MAC so the mcp-attachments server can validate
+// and resolve it without any shared database.
+func (s *Server) uploadToS3(r *http.Request, key string, file io.Reader, size int64) (attachmentID string, written int64, err error) {
 	buf, err := io.ReadAll(io.LimitReader(file, maxUploadSize+1))
 	if err != nil {
 		return "", 0, err
@@ -110,15 +115,18 @@ func (s *Server) uploadToS3(r *http.Request, key string, file io.Reader, size in
 		return "", 0, fmt.Errorf("s3 put: %w", err)
 	}
 
-	presigned, err := s.s3.presign.PresignGetObject(r.Context(), &s3.GetObjectInput{
-		Bucket: aws.String(s.s3.cfg.Bucket),
-		Key:    aws.String(key),
-	}, s3.WithPresignExpires(s.s3.cfg.PresignTTL))
-	if err != nil {
-		return "", 0, fmt.Errorf("s3 presign: %w", err)
-	}
+	return makeAttachmentID(s.cfg.AttachmentSecret, s.s3.cfg.Bucket, key), written, nil
+}
 
-	return presigned.URL, written, nil
+// makeAttachmentID returns a compact signed token: hex(hmac[:8]) + "." + base64url(s3_key).
+// The mcp-attachments server verifies the MAC before resolving the key — preventing
+// the agent from requesting arbitrary S3 objects.
+func makeAttachmentID(secret []byte, bucket, s3Key string) string {
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(bucket + ":" + s3Key))
+	macHex := hex.EncodeToString(mac.Sum(nil)[:8])
+	keyEnc := base64.RawURLEncoding.EncodeToString([]byte(s3Key))
+	return macHex + "." + keyEnc
 }
 
 // uploadToFilesystem saves the file locally — dev/single-node fallback only.

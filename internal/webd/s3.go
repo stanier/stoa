@@ -16,17 +16,16 @@ type S3Config struct {
 	Bucket          string
 	AccessKeyID     string
 	SecretAccessKey string
-	PresignTTL      time.Duration
+	PresignTTL      time.Duration // kept for potential future use; not used by upload path
 }
 
-// s3Clients bundles the plain S3 client and the presign client together.
+// s3Clients bundles the S3 client used for PutObject calls.
 type s3Clients struct {
-	client  *s3.Client
-	presign *s3.PresignClient
-	cfg     S3Config
+	client *s3.Client
+	cfg    S3Config
 }
 
-// newS3Clients builds an S3 client pair from the given config.
+// newS3Clients builds an S3 client from the given config.
 // PathStyle is forced on because Garage (and most self-hosted S3) requires it.
 func newS3Clients(cfg S3Config) (*s3Clients, error) {
 	if cfg.Endpoint == "" {
@@ -43,12 +42,7 @@ func newS3Clients(cfg S3Config) (*s3Clients, error) {
 	if region == "" {
 		region = "garage"
 	}
-	ttl := cfg.PresignTTL
-	if ttl == 0 {
-		ttl = 7 * 24 * time.Hour
-	}
 	cfg.Region = region
-	cfg.PresignTTL = ttl
 
 	awsCfg := aws.Config{
 		Region: region,
@@ -65,8 +59,7 @@ func newS3Clients(cfg S3Config) (*s3Clients, error) {
 	})
 
 	return &s3Clients{
-		client:  client,
-		presign: s3.NewPresignClient(client),
-		cfg:     cfg,
+		client: client,
+		cfg:    cfg,
 	}, nil
 }
