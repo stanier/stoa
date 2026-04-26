@@ -38,9 +38,6 @@ type Server struct {
 	cfg                    Config
 	fileCfg                *authdConfig
 	providers              []*provider
-	flows                  *flowStore
-	logins                 *loginStore
-	zulipLinks             *zulipLinkStore
 	db                     *authdb.DB
 	mux                    *http.ServeMux
 	adminToken             string
@@ -74,9 +71,6 @@ func NewServer(cfg Config) (*Server, error) {
 	s := &Server{
 		cfg:                    cfg,
 		fileCfg:                fileCfg,
-		flows:                  newFlowStore(),
-		logins:                 newLoginStore(),
-		zulipLinks:             newZulipLinkStore(),
 		mux:                    http.NewServeMux(),
 		adminToken:             os.Getenv("AUTHD_ADMIN_TOKEN"),
 		allowedRedirectOrigins: allowedOrigins,
@@ -216,10 +210,14 @@ func (s *Server) handleLoginStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "AUTHD_EXTERNAL_URL is not configured", http.StatusInternalServerError)
 		return
 	}
+	if s.db == nil {
+		http.Error(w, "database not configured", http.StatusServiceUnavailable)
+		return
+	}
 
 	var req struct {
-		ProviderID         string `json:"provider_id"`
-		PostLoginRedirect  string `json:"post_login_redirect"`
+		ProviderID        string `json:"provider_id"`
+		PostLoginRedirect string `json:"post_login_redirect"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -242,10 +240,9 @@ func (s *Server) handleLoginStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	const loginTTL = 5 * time.Minute
+	ctx := r.Context()
 
-	// Begin a PKCE flow; embed the login_id in the state so the callback can
-	// look up and complete the pending login.
-	state, codeChallenge, err := s.flows.begin(p)
+	state, codeChallenge, err := s.db.BeginOAuthFlow(ctx, p.id, 10*time.Minute)
 	if err != nil {
 		logging.Errorf("authd: login start: begin flow: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -254,15 +251,16 @@ func (s *Server) handleLoginStart(w http.ResponseWriter, r *http.Request) {
 
 	authURL := p.authorizationURL(s.redirectURI(), state, codeChallenge)
 
-	loginID, err := s.logins.create(p.id, authURL, req.PostLoginRedirect, loginTTL)
+	loginID, err := s.db.CreateLoginFlow(ctx, p.id, authURL, req.PostLoginRedirect, loginTTL)
 	if err != nil {
-		logging.Errorf("authd: login start: create login entry: %v", err)
+		logging.Errorf("authd: login start: create login flow: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	// Store the login_id in the flow state so the callback can find it.
-	s.flows.attachLoginID(state, loginID)
+	if err := s.db.UpdateOAuthFlowLoginID(ctx, state, loginID); err != nil {
+		logging.Warnf("authd: login start: attach login id: %v", err)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -295,7 +293,11 @@ func (s *Server) handleLoginPoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionToken, llmKey, errMsg, done := s.logins.consume(loginID)
+	sessionToken, llmKey, errMsg, done, err := s.db.ConsumeLoginFlow(r.Context(), loginID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	if !done {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -333,6 +335,10 @@ func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "AUTHD_EXTERNAL_URL is not configured", http.StatusInternalServerError)
 		return
 	}
+	if s.db == nil {
+		http.Error(w, "database not configured", http.StatusServiceUnavailable)
+		return
+	}
 
 	providerID := r.URL.Query().Get("provider_id")
 	p := s.findProvider(providerID)
@@ -345,7 +351,7 @@ func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state, codeChallenge, err := s.flows.begin(p)
+	state, codeChallenge, err := s.db.BeginOAuthFlow(r.Context(), p.id, 10*time.Minute)
 	if err != nil {
 		logging.Errorf("authd: begin flow: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -371,6 +377,10 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if s.db == nil {
+		http.Error(w, "database not configured", http.StatusServiceUnavailable)
+		return
+	}
 
 	// Check for upstream error response.
 	if errParam := r.URL.Query().Get("error"); errParam != "" {
@@ -387,19 +397,25 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, err := s.flows.consume(state)
+	ctx := r.Context()
+
+	flow, err := s.db.ConsumeOAuthFlow(ctx, state)
 	if err != nil {
-		// If this was a polling flow, mark it failed so the CLI gets a clean error.
-		// We don't know the loginID here since consume failed, so just return the error.
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	tok, err := entry.provider.exchangeCode(r.Context(), code, s.redirectURI(), entry.codeVerifier)
+	p := s.findProvider(flow.ProviderID)
+	if p == nil {
+		http.Error(w, "provider no longer configured", http.StatusInternalServerError)
+		return
+	}
+
+	tok, err := p.exchangeCode(ctx, code, s.redirectURI(), flow.CodeVerifier)
 	if err != nil {
 		logging.Warnf("authd: token exchange error: %v", err)
-		if entry.loginID != "" {
-			s.logins.fail(entry.loginID, "token exchange failed")
+		if flow.LoginID != "" {
+			_ = s.db.FailLoginFlow(ctx, flow.LoginID, "token exchange failed")
 			s.renderCallbackError(w, "Authentication failed. You may close this tab.")
 		} else {
 			http.Error(w, "token exchange failed", http.StatusBadGateway)
@@ -407,30 +423,14 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := entry.provider.fetchUserinfo(r.Context(), tok.AccessToken)
+	info, err := p.fetchUserinfo(ctx, tok.AccessToken)
 	if err != nil {
 		logging.Warnf("authd: userinfo error: %v", err)
-		if entry.loginID != "" {
-			s.logins.fail(entry.loginID, "failed to fetch user info")
+		if flow.LoginID != "" {
+			_ = s.db.FailLoginFlow(ctx, flow.LoginID, "failed to fetch user info")
 			s.renderCallbackError(w, "Authentication failed. You may close this tab.")
 		} else {
 			http.Error(w, "failed to fetch user info", http.StatusBadGateway)
-		}
-		return
-	}
-
-	if s.db == nil {
-		// No database — stub response for end-to-end flow testing without Postgres.
-		logging.Warnf("authd: no database configured; returning stub session token for %s", info.Email)
-		if entry.loginID != "" {
-			s.logins.complete(entry.loginID, "no-db-stub", "")
-			s.renderCallbackSuccess(w, info.Email)
-		} else {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]string{
-				"session_token": "no-db-stub",
-				"email":         info.Email,
-			})
 		}
 		return
 	}
@@ -440,14 +440,14 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		displayName = info.PreferredUsername
 	}
 
-	userID, err := s.db.UpsertUser(r.Context(), entry.provider.issuerURL, info.Sub, info.Email, displayName)
+	userID, err := s.db.UpsertUser(ctx, p.issuerURL, info.Sub, info.Email, displayName)
 	if err != nil {
 		logging.Warnf("authd: upsert user error: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	rawToken, _, err := s.db.CreateSession(r.Context(), userID, s.sessionTTL())
+	rawToken, _, err := s.db.CreateSession(ctx, userID, s.sessionTTL())
 	if err != nil {
 		logging.Warnf("authd: create session error: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -457,36 +457,42 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	// Provision the per-user llmp_* LLM key (best-effort — login succeeds even if apikeyd is down).
 	var llmKey string
 	if s.apikeydClient != nil {
-		if pk, pkErr := s.apikeydClient.ProvisionUserKey(r.Context(), userID, s.apikeydAdminToken); pkErr != nil {
+		if pk, pkErr := s.apikeydClient.ProvisionUserKey(ctx, userID, s.apikeydAdminToken); pkErr != nil {
 			logging.Warnf("authd: provision LLM key for user %s: %v", userID, pkErr)
 		} else {
 			llmKey = pk.Key
 		}
 	}
 
-	s.logins.complete(entry.loginID, rawToken, llmKey) // no-op when loginID is empty
+	// Complete the polling login flow and get the BFF redirect URL in one query.
+	var postLoginRedirect string
+	if flow.LoginID != "" {
+		postLoginRedirect, err = s.db.CompleteLoginFlow(ctx, flow.LoginID, rawToken, llmKey)
+		if err != nil {
+			logging.Warnf("authd: complete login flow: %v", err)
+		}
+	}
 
 	// If this was a Zulip account link flow, store the email → user_id mapping.
-	if entry.zulipLinkToken != "" {
-		linkEntry, err := s.zulipLinks.consume(entry.zulipLinkToken)
+	if flow.ZulipLinkToken != "" {
+		linkEntry, err := s.db.ConsumeZulipLinkToken(ctx, flow.ZulipLinkToken)
 		if err != nil {
 			logging.Warnf("authd: zulip link callback: consume token: %v", err)
-		} else if dbErr := s.db.CreateZulipLink(r.Context(), linkEntry.zulipEmail, userID); dbErr != nil {
+		} else if dbErr := s.db.CreateZulipLink(ctx, linkEntry.ZulipEmail, userID); dbErr != nil {
 			logging.Warnf("authd: zulip link callback: store link: %v", dbErr)
 		} else {
-			logging.Infof("authd: linked Zulip %q → user %s", linkEntry.zulipEmail, userID)
-			s.renderZulipLinkedPage(w, linkEntry.zulipEmail)
+			logging.Infof("authd: linked Zulip %q → user %s", linkEntry.ZulipEmail, userID)
+			s.renderZulipLinkedPage(w, linkEntry.ZulipEmail)
 			return
 		}
 	}
 
-	logging.Infof("authd: user %s (%s) authenticated via %s", userID, info.Email, entry.provider.id)
+	logging.Infof("authd: user %s (%s) authenticated via %s", userID, info.Email, p.id)
 
-	if entry.loginID != "" {
-		login, ok := s.logins.get(entry.loginID)
-		if ok && login.postLoginRedirect != "" {
+	if flow.LoginID != "" {
+		if postLoginRedirect != "" {
 			// Web BFF flow — redirect browser back to the app with the token and LLM key.
-			dest := login.postLoginRedirect + "?token=" + rawToken
+			dest := postLoginRedirect + "?token=" + rawToken
 			if llmKey != "" {
 				dest += "&llm_key=" + llmKey
 			}
@@ -777,6 +783,12 @@ func bearerToken(r *http.Request) string {
 		return strings.TrimSpace(after)
 	}
 	return ""
+}
+
+// verifyBearerToken returns nil if the token is a valid authd session.
+func (s *Server) verifyBearerToken(ctx context.Context, raw string) error {
+	_, err := s.db.ValidateSession(ctx, raw)
+	return err
 }
 
 // remoteIP returns the best-effort client IP for rate limiting.

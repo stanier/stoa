@@ -181,7 +181,8 @@ services:
     build:
       context: .
       target: apikeyd
-    container_name: stoa-apikeyd
+    deploy:
+      replicas: 1
     mem_limit: 128m
     memswap_limit: 128m
     ports:
@@ -305,7 +306,8 @@ services:
     build:
       context: .
       target: authd
-    container_name: stoa-authd
+    deploy:
+      replicas: 1
     mem_limit: 128m
     memswap_limit: 128m
     ports:
@@ -383,7 +385,8 @@ services:
     build:
       context: .
       target: agentd
-    container_name: stoa-agentd
+    deploy:
+      replicas: 2
     mem_limit: 512m
     memswap_limit: 512m
     environment:
@@ -524,7 +527,8 @@ services:
     build:
       context: .
       target: webd
-    container_name: stoa-webd
+    deploy:
+      replicas: 2
     mem_limit: 128m
     memswap_limit: 128m
     environment:

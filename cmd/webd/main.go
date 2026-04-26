@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/stanier/stoa/internal/logging"
 	"github.com/stanier/stoa/internal/webd"
@@ -52,8 +54,11 @@ func main() {
 
 	addr := ":" + cfg.Port
 	httpSrv := &http.Server{
-		Addr:    addr,
-		Handler: srv.Router(),
+		Addr:         addr,
+		Handler:      srv.Router(),
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 620 * time.Second, // longer than the 600s proxy_read_timeout for WS
+		IdleTimeout:  120 * time.Second,
 	}
 
 	go func() {
@@ -68,8 +73,10 @@ func main() {
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	<-sigCh
 
-	logging.Info("webd: shutting down")
-	_ = httpSrv.Close()
+	logging.Info("webd: shutting down, draining active connections (60s)")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	_ = httpSrv.Shutdown(shutdownCtx)
 }
 
 func resolveStr(flagVal, envVal string) string {
