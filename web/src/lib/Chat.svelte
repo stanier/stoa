@@ -2,10 +2,93 @@
   import { onMount, onDestroy, tick } from 'svelte'
   import SettingsPanel from './SettingsPanel.svelte'
   import ToolsPanel from './ToolsPanel.svelte'
+  import ModelPicker from './ModelPicker.svelte'
   import { marked } from 'marked'
+  import hljs from 'highlight.js/lib/core'
+  import langBash       from 'highlight.js/lib/languages/bash'
+  import langC          from 'highlight.js/lib/languages/c'
+  import langCpp        from 'highlight.js/lib/languages/cpp'
+  import langCSS        from 'highlight.js/lib/languages/css'
+  import langDockerfile from 'highlight.js/lib/languages/dockerfile'
+  import langGo         from 'highlight.js/lib/languages/go'
+  import langHtml       from 'highlight.js/lib/languages/xml'
+  import langJS         from 'highlight.js/lib/languages/javascript'
+  import langJSON       from 'highlight.js/lib/languages/json'
+  import langMarkdown   from 'highlight.js/lib/languages/markdown'
+  import langPython     from 'highlight.js/lib/languages/python'
+  import langRust       from 'highlight.js/lib/languages/rust'
+  import langSQL        from 'highlight.js/lib/languages/sql'
+  import langTS         from 'highlight.js/lib/languages/typescript'
+  import langYAML       from 'highlight.js/lib/languages/yaml'
+
+  hljs.registerLanguage('bash',       langBash)
+  hljs.registerLanguage('sh',         langBash)
+  hljs.registerLanguage('shell',      langBash)
+  hljs.registerLanguage('c',          langC)
+  hljs.registerLanguage('cpp',        langCpp)
+  hljs.registerLanguage('css',        langCSS)
+  hljs.registerLanguage('dockerfile', langDockerfile)
+  hljs.registerLanguage('go',         langGo)
+  hljs.registerLanguage('html',       langHtml)
+  hljs.registerLanguage('xml',        langHtml)
+  hljs.registerLanguage('javascript', langJS)
+  hljs.registerLanguage('js',         langJS)
+  hljs.registerLanguage('json',       langJSON)
+  hljs.registerLanguage('markdown',   langMarkdown)
+  hljs.registerLanguage('python',     langPython)
+  hljs.registerLanguage('py',         langPython)
+  hljs.registerLanguage('rust',       langRust)
+  hljs.registerLanguage('sql',        langSQL)
+  hljs.registerLanguage('typescript', langTS)
+  hljs.registerLanguage('ts',         langTS)
+  hljs.registerLanguage('yaml',       langYAML)
+  hljs.registerLanguage('yml',        langYAML)
+
+  marked.use({
+    renderer: {
+      code({ text, lang }) {
+        const language = lang && hljs.getLanguage(lang) ? lang : null
+        let highlighted
+        try {
+          highlighted = language
+            ? hljs.highlight(text, { language }).value
+            : hljs.highlightAuto(text).value
+        } catch (_) {
+          highlighted = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        }
+        const bar = language
+          ? `<div class="hljs-lang-bar">${language}</div>`
+          : ''
+        return `<div class="hljs-block">${bar}<pre><code class="hljs">${highlighted}</code></pre></div>`
+      },
+      codespan({ text }) {
+        return `<code class="inline-code">${text}</code>`
+      },
+    },
+  })
 
   function renderMarkdown(text) {
     return marked.parse(text ?? '', { breaks: true })
+  }
+
+  // ── AssistantMeta helpers ────────────────────────────────────────────────
+  let copyStates = $state({})  // toolUseId-ish key → 'copied'
+
+  function fmtTime(iso) {
+    if (!iso) return null
+    return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
+
+  function tokPerSec(msg) {
+    if (!msg.tokens || !msg.duration) return null
+    return (msg.tokens / msg.duration).toFixed(1)
+  }
+
+  function copyMsg(msg, key) {
+    navigator.clipboard?.writeText(msg.content).then(() => {
+      copyStates = { ...copyStates, [key]: true }
+      setTimeout(() => { copyStates = { ...copyStates, [key]: false } }, 1800)
+    })
   }
 
   let { user, sessionId, sessionTitle = '', onSessionEnd, onTitleUpdate } = $props()
@@ -87,7 +170,8 @@
             return [{ kind: 'user', content: text, attachments }]
           }
           case 'assistant': {
-            return [{ kind: 'assistant', content: m.Content, thinking: m.Thinking ?? '', streaming: false }]
+            return [{ kind: 'assistant', content: m.Content, thinking: m.Thinking ?? '', streaming: false,
+              timestamp: m.CreatedAt ?? null, tokens: m.OutputTokens ?? null }]
           }
           case 'tool':
             return [{
@@ -135,7 +219,9 @@
           messages = messages
         } else {
           messages = [...messages, {
-            kind: 'assistant', content, thinking, streaming: true
+            kind: 'assistant', content, thinking, streaming: true,
+            streamStart: Date.now(),
+            timestamp: new Date().toISOString(),
           }]
         }
         scrollToBottom()
@@ -147,6 +233,8 @@
         if (last) {
           if (ev.done?.full_content  !== undefined) last.content  = ev.done.full_content
           if (ev.done?.full_thinking !== undefined) last.thinking = ev.done.full_thinking
+          if (ev.done?.output_tokens) last.tokens = ev.done.output_tokens
+          if (last.streamStart) last.duration = (Date.now() - last.streamStart) / 1000
           last.streaming = false
           messages = messages
         }
@@ -439,8 +527,30 @@
   }
   .md-content :global(ul), .md-content :global(ol) { margin: 0.3em 0 0.6em 1.4em; padding: 0; }
   .md-content :global(li) { margin: 0.15em 0; }
+  .md-content :global(.inline-code) {
+    background: var(--bg); border: 1px solid var(--border);
+    padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.875em; font-family: monospace;
+  }
+  /* highlight.js code blocks */
+  .md-content :global(.hljs-block) {
+    border: 1px solid var(--border); border-radius: 7px;
+    overflow: hidden; font-size: 0.82em; margin: 0.5em 0;
+  }
+  .md-content :global(.hljs-lang-bar) {
+    background: #161b22; padding: 0.3rem 0.9rem;
+    font-size: 0.72em; color: #8b949e; font-family: monospace;
+    border-bottom: 1px solid #30363d; letter-spacing: 0.04em;
+  }
+  .md-content :global(.hljs-block pre) {
+    margin: 0; padding: 0.75rem 1rem; overflow-x: auto;
+    background: #0d1117; font-family: monospace; font-size: 1em;
+  }
+  .md-content :global(.hljs-block pre code) {
+    background: none; border: none; padding: 0; font-size: 1em;
+  }
+  /* Fallback for non-hljs-block code (shouldn't appear but just in case) */
   .md-content :global(code) {
-    background: var(--depth); border: 1px solid var(--border);
+    background: var(--bg); border: 1px solid var(--border);
     padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.875em; font-family: monospace;
   }
   .md-content :global(pre) {
@@ -465,6 +575,32 @@
     animation: blink 1s step-end infinite; margin-left: 1px;
   }
   @keyframes blink { 50% { opacity: 0; } }
+
+  /* Assistant metadata bar */
+  .msg-meta {
+    display: flex; align-items: center; gap: 0.6rem;
+    padding: 0 0.1rem; height: 22px;
+  }
+  .meta-time {
+    font-size: 0.7rem; color: var(--text5);
+    font-variant-numeric: tabular-nums;
+  }
+  .meta-tps {
+    font-size: 0.7rem; color: var(--text5);
+    font-variant-numeric: tabular-nums;
+    display: flex; align-items: center; gap: 0.2rem;
+    cursor: default;
+  }
+  .meta-spacer { flex: 1; }
+  .meta-btn {
+    background: none; border: none; cursor: pointer;
+    padding: 0.1rem 0.3rem; border-radius: 4px;
+    font-size: 0.7rem; color: var(--text5);
+    display: flex; align-items: center; gap: 0.25rem;
+    transition: color 0.15s; font-family: inherit;
+  }
+  .meta-btn:hover { color: var(--text2); }
+  .meta-btn.copied { color: var(--accent-light); }
 
   .msg-tool { display: flex; }
   .tool-row {
@@ -599,6 +735,7 @@
       <span class="session-title">{liveTitle}</span>
     {/if}
     <div class="header-right">
+      <ModelPicker {sessionId} />
       <button class="icon-btn" class:active={toolsOpen}
         onclick={() => { toolsOpen = !toolsOpen; if (toolsOpen) settingsOpen = false }}
         title="Tools">
@@ -618,7 +755,7 @@
   </header>
 
   <div class="messages">
-    {#each messages as msg}
+    {#each messages as msg, i}
 
       {#if msg.kind === 'user'}
         <div class="msg-user">
@@ -648,6 +785,38 @@
           <div class="bubble-assistant md-content">
             {@html renderMarkdown(msg.content)}{#if msg.streaming}<span class="cursor"></span>{/if}
           </div>
+          {#if !msg.streaming}
+            {@const msgKey = i}
+            {@const tps = tokPerSec(msg)}
+            <div class="msg-meta">
+              {#if msg.timestamp}
+                <span class="meta-time">{fmtTime(msg.timestamp)}</span>
+              {/if}
+              {#if tps}
+                <span class="meta-tps" title="{msg.tokens} tokens in {msg.duration?.toFixed(1)}s">
+                  <svg width="9" height="9" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+                    <path d="M6 1v5l3 2"/><circle cx="6" cy="6" r="5"/>
+                  </svg>
+                  {tps} tok/s
+                </span>
+              {/if}
+              <span class="meta-spacer"></span>
+              <button
+                class="meta-btn"
+                class:copied={copyStates[msgKey]}
+                onclick={() => copyMsg(msg, msgKey)}
+                title="Copy response"
+              >
+                {#if copyStates[msgKey]}
+                  <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6l3 3 5-5"/></svg>
+                  Copied
+                {:else}
+                  <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1.2"/><path d="M1 8V2a1 1 0 0 1 1-1h6"/></svg>
+                  Copy
+                {/if}
+              </button>
+            </div>
+          {/if}
         </div>
 
       {:else if msg.kind === 'tool'}

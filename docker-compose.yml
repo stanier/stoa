@@ -386,9 +386,9 @@ services:
       context: .
       target: agentd
     deploy:
-      replicas: 2
-    mem_limit: 512m
-    memswap_limit: 512m
+      replicas: 4
+    mem_limit: 256m
+    memswap_limit: 256m
     environment:
       # LLM provider
       LLM_PROVIDER: ${LLM_PROVIDER}
@@ -528,7 +528,7 @@ services:
       context: .
       target: webd
     deploy:
-      replicas: 2
+      replicas: 4
     mem_limit: 128m
     memswap_limit: 128m
     environment:
