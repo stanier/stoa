@@ -91,7 +91,10 @@
     })
   }
 
-  let { user, sessionId, sessionTitle = '', onSessionEnd, onTitleUpdate } = $props()
+  let { user, sessionId, sessionTitle = '', onSessionEnd, onTitleUpdate, active = true } = $props()
+
+  // When this session becomes the active view, scroll to the latest message.
+  $effect(() => { if (active) scrollToBottom() })
 
   let liveTitle = $state(sessionTitle)
   $effect(() => { liveTitle = sessionTitle })
@@ -108,10 +111,11 @@
   let fileInput     = null
   let ws            = null
   let msgEnd        = null
+  let destroyed     = false
 
   onMount(async () => {
     await loadHistory()
-    openWS()
+    if (!destroyed) openWS()
   })
 
   // S3 mode: agent calls read_attachment(attachment_id); local fallback uses filesystem path.
@@ -193,7 +197,16 @@
     } catch (_) {}
   }
 
-  onDestroy(() => ws?.close())
+  onDestroy(() => {
+    destroyed = true
+    if (ws) {
+      ws.onopen    = null
+      ws.onclose   = null
+      ws.onerror   = null
+      ws.onmessage = null
+      ws.close()
+    }
+  })
 
   function openWS() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
