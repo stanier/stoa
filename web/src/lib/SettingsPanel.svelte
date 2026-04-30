@@ -264,7 +264,7 @@
     <hr class="divider" />
 
     <div class="toggle-row">
-      <span class="toggle-label">Extended thinking <span style="font-size:0.65rem;color:var(--text5)">(Anthropic)</span></span>
+      <span class="toggle-label">Extended thinking</span>
       <label class="switch">
         <input type="checkbox"
           checked={config.enable_thinking ?? false}

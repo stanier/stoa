@@ -12,8 +12,7 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	LLM          LLMConfig          `mapstructure:"llm"`
-	LLMProviders []LLMProviderConfig `mapstructure:"llm_providers"`
+	LLM LLMConfig `mapstructure:"llm"`
 	UI          UIConfig                 `mapstructure:"ui"`
 	Compaction  CompactionConfig         `mapstructure:"compaction"`
 	MCP         MCPConfig                `mapstructure:"mcp"`
@@ -179,46 +178,87 @@ type TitlingConfig struct {
 	Model string `mapstructure:"model"`
 	// Prompt overrides the built-in titling system prompt.
 	Prompt string `mapstructure:"prompt"`
+	// DisableThinking suppresses extended thinking for the titling call.
+	// Default true — titling is a cheap summarisation task that doesn't benefit
+	// from reasoning. Set to false to let the selected provider's own
+	// enable_thinking setting apply instead.
+	DisableThinking bool `mapstructure:"disable_thinking"`
 }
 
-// LLMProviderConfig describes one additional named LLM provider.
-// The primary provider is configured via LLMConfig (env vars / config file).
-// Additional providers are listed here and selectable per session.
+// LLMProviderConfig describes one named LLM provider.
+// All providers — including the default — are defined under llm.providers in the YAML config.
 type LLMProviderConfig struct {
-	// Name is a unique identifier used in session overrides. e.g. "anthropic-opus"
+	// Name is a unique identifier used when selecting a provider. e.g. "llm-proxy", "anthropic-opus"
 	Name string `mapstructure:"name"`
-	// Type is "openai" (or any OpenAI-compatible) or "anthropic".
+	// Type is "openai" (or any OpenAI-compatible endpoint), "anthropic", or "gemini".
 	Type string `mapstructure:"type"`
-	// APIURL is the base URL for the provider.
+	// APIURL is the literal base URL for the provider endpoint.
+	// Leave empty and use api_url_env to inject the URL from the environment.
 	APIURL string `mapstructure:"api_url"`
-	// APIKey is the literal API key. Use APIKeyEnv instead to avoid secrets in config files.
+	// APIURLEnv names the environment variable that holds the API endpoint URL.
+	// Used (and wins over api_url) when non-empty.
+	APIURLEnv string `mapstructure:"api_url_env"`
+	// APIKey is the literal API key. Use api_key_env instead to avoid secrets in config files.
 	APIKey string `mapstructure:"api_key"`
 	// APIKeyEnv names the environment variable that holds the API key.
-	// If unset, falls back to LLM_<UPPERCASE_NAME>_API_KEY automatically.
+	// If unset, falls back to a provider-specific name (e.g. ANTHROPIC_API_KEY).
 	APIKeyEnv string `mapstructure:"api_key_env"`
-	// Models is a static model list. When empty, models are auto-discovered
-	// from the provider's /v1/models endpoint at startup.
+	// Model is the default/active model for this provider.
+	Model string `mapstructure:"model"`
+	// Models is the static list of available model IDs for this provider.
+	// When empty, models are auto-discovered from /v1/models at startup.
 	Models []string `mapstructure:"models"`
-	// ModelRefreshInterval controls how often model discovery runs.
-	// Default: 0 (no periodic refresh — only on startup).
+	// ModelRefreshInterval controls how often model discovery is repeated.
+	// Default: 0 (discover only at startup).
 	ModelRefreshInterval string `mapstructure:"model_refresh_interval"`
+	// MaxTokens is the maximum number of tokens in the response.
+	MaxTokens int `mapstructure:"max_tokens"`
+	// TLSSkipVerify disables TLS certificate verification for this provider.
+	TLSSkipVerify bool `mapstructure:"tls_skip_verify"`
+	// Sampling parameters — only sent when explicitly set.
+	Temperature          *float64 `mapstructure:"temperature"`
+	TopP                 *float64 `mapstructure:"top_p"`
+	TopK                 *int     `mapstructure:"top_k"`             // Anthropic only
+	PresencePenalty      *float64 `mapstructure:"presence_penalty"`  // OpenAI only
+	FrequencyPenalty     *float64 `mapstructure:"frequency_penalty"` // OpenAI only
+	Stop                 []string `mapstructure:"stop"`
+	EnableThinking       *bool    `mapstructure:"enable_thinking"`        // Anthropic native; OpenAI passed as extra body fields
+	ThinkingBudgetTokens *int     `mapstructure:"thinking_budget_tokens"` // Anthropic native; OpenAI passed as extra body fields
 }
 
-// LLMConfig holds LLM-related configuration
+// LLMConfig holds the multi-provider LLM configuration.
 type LLMConfig struct {
-	Provider         string   `mapstructure:"provider"`
-	APIURL           string   `mapstructure:"api_url"`
-	APIKey           string   `mapstructure:"api_key"`
-	Model            string   `mapstructure:"model"`
-	MaxTokens        int      `mapstructure:"max_tokens"`
-	Temperature      *float64 `mapstructure:"temperature"`       // Optional: only sent if set
-	TopP             *float64 `mapstructure:"top_p"`             // Optional: only sent if set
-	TopK             *int     `mapstructure:"top_k"`             // Optional: only sent if set (Anthropic only)
-	PresencePenalty  *float64 `mapstructure:"presence_penalty"`  // Optional: only sent if set (OpenAI only)
-	FrequencyPenalty *float64 `mapstructure:"frequency_penalty"` // Optional: only sent if set (OpenAI only)
-	Stop             []string `mapstructure:"stop"`              // Optional: custom stop sequences
-	EnableThinking      *bool `mapstructure:"enable_thinking"`   // Optional: enable extended thinking (Anthropic only)
-	ThinkingBudgetTokens *int `mapstructure:"thinking_budget_tokens"` // Optional: token budget for thinking (default: 10000)
+	// Default is the name of the provider to use when no override is requested.
+	// When empty, the first entry in Providers is used.
+	Default   string              `mapstructure:"default"`
+	Providers []LLMProviderConfig `mapstructure:"providers"`
+}
+
+// DefaultProvider returns the provider designated by LLM.Default, falling back
+// to the first provider when Default is unset or not found.
+// Returns nil when no providers are configured.
+func (c *LLMConfig) DefaultProvider() *LLMProviderConfig {
+	if len(c.Providers) == 0 {
+		return nil
+	}
+	if c.Default != "" {
+		for i := range c.Providers {
+			if c.Providers[i].Name == c.Default {
+				return &c.Providers[i]
+			}
+		}
+	}
+	return &c.Providers[0]
+}
+
+// GetProvider returns the provider with the given name, or nil if not found.
+func (c *LLMConfig) GetProvider(name string) *LLMProviderConfig {
+	for i := range c.Providers {
+		if c.Providers[i].Name == name {
+			return &c.Providers[i]
+		}
+	}
+	return nil
 }
 
 // UIConfig holds UI-related configuration
@@ -476,8 +516,6 @@ func Load() (*Config, error) {
 	v := viper.New()
 
 	// Set initial defaults
-	v.SetDefault("llm.provider", DefaultProvider)
-	v.SetDefault("llm.max_tokens", DefaultMaxTokens)
 	v.SetDefault("ui.theme", DefaultTheme)
 	v.SetDefault("ui.show_timestamps", true)
 	v.SetDefault("ui.hide_system_prompt", true)
@@ -559,38 +597,9 @@ func Load() (*Config, error) {
 	v.BindEnv("prompts.enabled", "PROMPTS_ENABLED")
 	v.BindEnv("prompts.override_dir", "PROMPTS_DIR")
 
-	// Titling defaults
+	// Titling defaults — all titling options come from YAML only.
 	v.SetDefault("titling.enabled", false)
-	v.BindEnv("titling.enabled", "TITLING_ENABLED")
-	v.BindEnv("titling.provider", "TITLING_PROVIDER")
-	v.BindEnv("titling.model", "TITLING_MODEL")
-
-	// Bind provider first
-	v.BindEnv("llm.provider", "LLM_PROVIDER")
-
-	// Check provider to set provider-specific defaults
-	provider := v.GetString("llm.provider")
-	if provider == "" {
-		provider = os.Getenv("LLM_PROVIDER")
-	}
-	if provider == "" {
-		provider = DefaultProvider
-	}
-
-	// Set provider-specific defaults and bind environment variables
-	if provider == "anthropic" {
-		v.SetDefault("llm.api_url", DefaultAnthropicURL)
-		v.SetDefault("llm.model", DefaultAnthropicModel)
-		v.BindEnv("llm.api_key", "ANTHROPIC_API_KEY")
-		v.BindEnv("llm.api_url", "ANTHROPIC_API_URL")
-		v.BindEnv("llm.model", "ANTHROPIC_MODEL")
-	} else {
-		v.SetDefault("llm.api_url", DefaultOpenAIURL)
-		v.SetDefault("llm.model", DefaultOpenAIModel)
-		v.BindEnv("llm.api_key", "OPENAI_API_KEY")
-		v.BindEnv("llm.api_url", "OPENAI_API_URL")
-		v.BindEnv("llm.model", "OPENAI_MODEL")
-	}
+	v.SetDefault("titling.disable_thinking", true)
 
 	// Gateway defaults
 	v.SetDefault("gateway.retryable_status_codes", []int{429, 500, 502, 503, 504})
@@ -699,9 +708,8 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
 	}
 
-	// Resolve _FILE env var pattern for API keys (Podman/Docker secrets support).
-	// If e.g. ANTHROPIC_API_KEY_FILE is set, read the file and use its content
-	// as the key value, overriding whatever Viper resolved from the direct env var.
+	// resolveFileSecret reads a secret value from a file path stored in an env var.
+	// Used for Podman/Docker secrets (e.g. ANTHROPIC_API_KEY_FILE=/run/secrets/api_key).
 	resolveFileSecret := func(fileEnv, current string) string {
 		path := os.Getenv(fileEnv)
 		if path == "" {
@@ -716,9 +724,61 @@ func Load() (*Config, error) {
 		}
 		return current
 	}
-	cfg.LLM.APIKey = resolveFileSecret("ANTHROPIC_API_KEY_FILE", cfg.LLM.APIKey)
-	cfg.LLM.APIKey = resolveFileSecret("OPENAI_API_KEY_FILE", cfg.LLM.APIKey)
-	cfg.LLM.APIKey = resolveFileSecret("GEMINI_API_KEY_FILE", cfg.LLM.APIKey)
+
+	// Apply per-provider defaults and resolve env vars for credentials/endpoints.
+	for i := range cfg.LLM.Providers {
+		pc := &cfg.LLM.Providers[i]
+
+		if pc.Type == "" {
+			pc.Type = DefaultProvider
+		}
+		if pc.MaxTokens <= 0 {
+			pc.MaxTokens = DefaultMaxTokens
+		}
+
+		// Determine which env var names to use for the API key and URL.
+		keyEnv := pc.APIKeyEnv
+		if keyEnv == "" {
+			if pc.Type == "anthropic" {
+				keyEnv = "ANTHROPIC_API_KEY"
+			} else {
+				keyEnv = "OPENAI_API_KEY"
+			}
+		}
+		urlEnv := pc.APIURLEnv
+		if urlEnv == "" {
+			if pc.Type == "anthropic" {
+				urlEnv = "ANTHROPIC_API_URL"
+			} else {
+				urlEnv = "OPENAI_API_URL"
+			}
+		}
+
+		// Env var wins over any literal api_key / api_url set in YAML.
+		if v := os.Getenv(keyEnv); v != "" {
+			pc.APIKey = v
+		}
+		pc.APIKey = resolveFileSecret(keyEnv+"_FILE", pc.APIKey)
+
+		if v := os.Getenv(urlEnv); v != "" {
+			pc.APIURL = v
+		}
+		if pc.APIURL == "" {
+			if pc.Type == "anthropic" {
+				pc.APIURL = DefaultAnthropicURL
+			} else {
+				pc.APIURL = DefaultOpenAIURL
+			}
+		}
+
+		if pc.Model == "" {
+			if pc.Type == "anthropic" {
+				pc.Model = DefaultAnthropicModel
+			} else {
+				pc.Model = DefaultOpenAIModel
+			}
+		}
+	}
 
 	// GATEWAY_FALLBACK_CHAIN is a comma-separated string; split it if the env var
 	// produced a single-element slice containing commas (Viper doesn't auto-split).
@@ -743,49 +803,59 @@ func Load() (*Config, error) {
 
 // Validate checks if the configuration is valid
 func (c *Config) Validate() error {
+	dp := c.LLM.DefaultProvider()
+
 	// When connecting to agentd, LLM credentials are not required on the client side.
-	if c.Agent.Address != "" && c.LLM.APIKey == "" {
+	if c.Agent.Address != "" && (dp == nil || dp.APIKey == "") {
 		return nil
 	}
 
-	if c.LLM.APIKey == "" {
-		if c.LLM.Provider == "anthropic" {
-			return fmt.Errorf("API key is required. Set ANTHROPIC_API_KEY environment variable or add it to config file")
+	if dp == nil {
+		return fmt.Errorf("no LLM providers configured; add at least one entry under llm.providers")
+	}
+
+	if dp.APIKey == "" {
+		keyEnv := dp.APIKeyEnv
+		if keyEnv == "" {
+			if dp.Type == "anthropic" {
+				keyEnv = "ANTHROPIC_API_KEY"
+			} else {
+				keyEnv = "OPENAI_API_KEY"
+			}
 		}
-		return fmt.Errorf("API key is required. Set OPENAI_API_KEY environment variable or add it to config file")
+		return fmt.Errorf("API key is required: set %s, or set api_key / api_key_env for provider %q in the YAML config", keyEnv, dp.Name)
 	}
 
-	if c.LLM.APIURL == "" {
-		return fmt.Errorf("API URL is required")
+	if dp.APIURL == "" {
+		return fmt.Errorf("API URL is required for provider %q", dp.Name)
 	}
 
-	if c.LLM.Model == "" {
-		return fmt.Errorf("model is required")
+	if dp.Model == "" {
+		return fmt.Errorf("model is required for provider %q", dp.Name)
 	}
 
-	if c.LLM.MaxTokens <= 0 {
-		return fmt.Errorf("max_tokens must be positive")
+	if dp.MaxTokens <= 0 {
+		return fmt.Errorf("max_tokens must be positive for provider %q", dp.Name)
 	}
 
-	// Validate optional parameters if set
-	if c.LLM.Temperature != nil && (*c.LLM.Temperature < 0 || *c.LLM.Temperature > 2) {
-		return fmt.Errorf("temperature must be between 0 and 2")
+	if dp.Temperature != nil && (*dp.Temperature < 0 || *dp.Temperature > 2) {
+		return fmt.Errorf("temperature must be between 0 and 2 for provider %q", dp.Name)
 	}
 
-	if c.LLM.TopP != nil && (*c.LLM.TopP < 0 || *c.LLM.TopP > 1) {
-		return fmt.Errorf("top_p must be between 0 and 1")
+	if dp.TopP != nil && (*dp.TopP < 0 || *dp.TopP > 1) {
+		return fmt.Errorf("top_p must be between 0 and 1 for provider %q", dp.Name)
 	}
 
-	if c.LLM.TopK != nil && *c.LLM.TopK < 0 {
-		return fmt.Errorf("top_k must be non-negative")
+	if dp.TopK != nil && *dp.TopK < 0 {
+		return fmt.Errorf("top_k must be non-negative for provider %q", dp.Name)
 	}
 
-	if c.LLM.PresencePenalty != nil && (*c.LLM.PresencePenalty < -2 || *c.LLM.PresencePenalty > 2) {
-		return fmt.Errorf("presence_penalty must be between -2 and 2")
+	if dp.PresencePenalty != nil && (*dp.PresencePenalty < -2 || *dp.PresencePenalty > 2) {
+		return fmt.Errorf("presence_penalty must be between -2 and 2 for provider %q", dp.Name)
 	}
 
-	if c.LLM.FrequencyPenalty != nil && (*c.LLM.FrequencyPenalty < -2 || *c.LLM.FrequencyPenalty > 2) {
-		return fmt.Errorf("frequency_penalty must be between -2 and 2")
+	if dp.FrequencyPenalty != nil && (*dp.FrequencyPenalty < -2 || *dp.FrequencyPenalty > 2) {
+		return fmt.Errorf("frequency_penalty must be between -2 and 2 for provider %q", dp.Name)
 	}
 
 	return nil
@@ -825,27 +895,37 @@ func CreateDefaultConfig() error {
 	defaultConfig := `# Stoa Configuration
 
 llm:
-  # API endpoint - works with any OpenAI-compatible API
-  api_url: https://api.openai.com/v1
+  # default names the provider to use when no session override is active.
+  # When omitted, the first entry in providers is used.
+  default: openai
 
-  # API key (better to use OPENAI_API_KEY environment variable)
-  api_key: ""
+  providers:
+    - name: openai
+      # type: "openai" (or any OpenAI-compatible endpoint) or "anthropic"
+      type: openai
+      # Model to use — set here in YAML.
+      model: gpt-4o
+      max_tokens: 4096
+      # api_key_env names the env var that holds the API key (set in .env).
+      # Defaults to OPENAI_API_KEY when type is openai.
+      api_key_env: OPENAI_API_KEY
+      # api_url_env names the env var that holds the endpoint URL (optional).
+      # Omit to use the provider's public endpoint.
+      # api_url_env: OPENAI_API_URL
 
-  # Model name (depends on provider)
-  model: gpt-4o
+      # Optional sampling parameters (uncomment to enable)
+      # temperature: 1.0              # 0.0–2.0
+      # top_p: 0.9                    # 0.0–1.0
+      # presence_penalty: 0.0         # -2.0–2.0 (OpenAI only)
+      # frequency_penalty: 0.0        # -2.0–2.0 (OpenAI only)
+      # stop: ["</response>", "END"]
 
-  # Required: Maximum tokens in response
-  max_tokens: 4096
-
-  # Optional sampling parameters (only sent if uncommented)
-  # By default, only max_tokens is sent - endpoints use their own defaults
-
-  # temperature: 1.0              # 0.0 to 2.0 - controls randomness (both providers)
-  # top_p: 0.9                    # 0.0 to 1.0 - nucleus sampling (both providers)
-  # top_k: 40                     # Anthropic only - limits token selection
-  # presence_penalty: 0.0         # -2.0 to 2.0 - penalize repeated topics (OpenAI only)
-  # frequency_penalty: 0.0        # -2.0 to 2.0 - penalize repeated tokens (OpenAI only)
-  # stop: ["</response>", "END"]  # Custom stop sequences
+# titling:
+#   enabled: true
+#   provider: ""   # name from llm.providers; empty = use default
+#   model: ""      # model ID; empty = provider default (use a fast/cheap model)
+#   prompt: ""     # override the built-in titling system prompt
+#   disable_thinking: true  # suppress extended thinking (default true); set false to let provider's enable_thinking apply
 
 ui:
   theme: dark

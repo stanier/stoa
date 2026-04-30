@@ -15,41 +15,89 @@ import (
 	"github.com/openai/openai-go/shared"
 )
 
+// isOpenAIAPI returns true when the base URL points to the official OpenAI API.
+// Compatible endpoints (Ollama, vLLM, Together, Groq, etc.) return false and
+// support the enable_thinking/thinking_budget_tokens extra-body convention.
+func isOpenAIAPI(apiURL string) bool {
+	return strings.Contains(apiURL, "api.openai.com")
+}
+
+// isReasoningModel returns true for OpenAI o-series models that use
+// reasoning_effort instead of enable_thinking.
+func isReasoningModel(model string) bool {
+	// Match o1, o3, o4-mini, o1-mini, o1-preview, o3-mini, etc.
+	if len(model) < 2 || model[0] != 'o' {
+		return false
+	}
+	return model[1] >= '0' && model[1] <= '9'
+}
+
+// thinkingBudgetToReasoningEffort maps a token budget to an OpenAI reasoning effort level.
+func thinkingBudgetToReasoningEffort(budget *int) shared.ReasoningEffort {
+	if budget == nil {
+		return shared.ReasoningEffortMedium
+	}
+	if *budget < 5000 {
+		return shared.ReasoningEffortLow
+	}
+	if *budget >= 20000 {
+		return shared.ReasoningEffortHigh
+	}
+	return shared.ReasoningEffortMedium
+}
+
+// extractReasoningContent pulls the reasoning_content field from a raw delta
+// JSON blob that some compatible endpoints (Arcee, DeepSeek R1, Qwen3 via
+// certain deployments) include instead of embedding thinking in <think> tags.
+func extractReasoningContent(rawJSON string) string {
+	if rawJSON == "" {
+		return ""
+	}
+	var raw struct {
+		ReasoningContent string `json:"reasoning_content"`
+	}
+	if err := json.Unmarshal([]byte(rawJSON), &raw); err == nil {
+		return raw.ReasoningContent
+	}
+	return ""
+}
+
 // OpenAIClient implements the Client interface using the OpenAI API
 type OpenAIClient struct {
 	client          openai.Client
-	config          *config.Config
+	pc              *config.LLMProviderConfig
 	thinkingBuffer  strings.Builder // Accumulates thinking content
 	inThinkingBlock bool            // Tracks if we're inside a thinking block
 }
 
 // NewOpenAIClientSimple creates an OpenAI-compatible client with minimal parameters.
-// Useful for proxy and other lightweight consumers that don't have a full config.Config.
+// Useful for proxy and other lightweight consumers that don't have a full config.
 // Per-request parameters (model, maxTokens, temperature, etc.) can be passed via
 // llm.Overrides in context. httpClient may be nil to use the SDK default.
 func NewOpenAIClientSimple(apiKey, apiURL, defaultModel string, defaultMaxTokens int, httpClient *http.Client) (*OpenAIClient, error) {
-	cfg := &config.Config{}
-	cfg.LLM.Provider = "openai"
-	cfg.LLM.APIKey = apiKey
-	cfg.LLM.APIURL = apiURL
-	cfg.LLM.Model = defaultModel
-	cfg.LLM.MaxTokens = defaultMaxTokens
-	return newOpenAIClientWithHTTP(cfg, httpClient)
+	pc := &config.LLMProviderConfig{
+		Type:      "openai",
+		APIKey:    apiKey,
+		APIURL:    apiURL,
+		Model:     defaultModel,
+		MaxTokens: defaultMaxTokens,
+	}
+	return newOpenAIClientWithHTTP(pc, httpClient)
 }
 
-// NewOpenAIClient creates a new OpenAI-compatible client
-func NewOpenAIClient(cfg *config.Config) (*OpenAIClient, error) {
-	return newOpenAIClientWithHTTP(cfg, nil)
+// NewOpenAIClient creates a new OpenAI-compatible client from a provider config entry.
+func NewOpenAIClient(pc *config.LLMProviderConfig) (*OpenAIClient, error) {
+	return newOpenAIClientWithHTTP(pc, nil)
 }
 
-func newOpenAIClientWithHTTP(cfg *config.Config, httpClient *http.Client) (*OpenAIClient, error) {
-	if cfg == nil {
-		return nil, fmt.Errorf("config is required")
+func newOpenAIClientWithHTTP(pc *config.LLMProviderConfig, httpClient *http.Client) (*OpenAIClient, error) {
+	if pc == nil {
+		return nil, fmt.Errorf("provider config is required")
 	}
 
 	opts := []option.RequestOption{
-		option.WithAPIKey(cfg.LLM.APIKey),
-		option.WithBaseURL(cfg.LLM.APIURL),
+		option.WithAPIKey(pc.APIKey),
+		option.WithBaseURL(pc.APIURL),
 	}
 	if httpClient != nil {
 		opts = append(opts, option.WithHTTPClient(httpClient))
@@ -59,7 +107,7 @@ func newOpenAIClientWithHTTP(cfg *config.Config, httpClient *http.Client) (*Open
 
 	return &OpenAIClient{
 		client:          client,
-		config:          cfg,
+		pc:              pc,
 		inThinkingBlock: false,
 	}, nil
 }
@@ -216,7 +264,7 @@ func (c *OpenAIClient) SendMessage(ctx context.Context, messages []chat.Message,
 
 	// Merge model override from context if present.
 	ov := OverridesFromContext(ctx)
-	sendModel := c.config.LLM.Model
+	sendModel := c.pc.Model
 	if ov != nil && ov.Model != nil {
 		sendModel = *ov.Model
 	}
@@ -225,30 +273,30 @@ func (c *OpenAIClient) SendMessage(ctx context.Context, messages []chat.Message,
 	params := openai.ChatCompletionNewParams{
 		Model:     shared.ChatModel(sendModel),
 		Messages:  apiMessages,
-		MaxTokens: openai.Int(int64(c.config.LLM.MaxTokens)),
+		MaxTokens: openai.Int(int64(c.pc.MaxTokens)),
 	}
 
 	// Add optional parameters only if configured
-	if c.config.LLM.Temperature != nil {
-		params.Temperature = openai.Float(*c.config.LLM.Temperature)
+	if c.pc.Temperature != nil {
+		params.Temperature = openai.Float(*c.pc.Temperature)
 	}
 
-	if c.config.LLM.TopP != nil {
-		params.TopP = openai.Float(*c.config.LLM.TopP)
+	if c.pc.TopP != nil {
+		params.TopP = openai.Float(*c.pc.TopP)
 	}
 
-	if c.config.LLM.PresencePenalty != nil {
-		params.PresencePenalty = openai.Float(*c.config.LLM.PresencePenalty)
+	if c.pc.PresencePenalty != nil {
+		params.PresencePenalty = openai.Float(*c.pc.PresencePenalty)
 	}
 
-	if c.config.LLM.FrequencyPenalty != nil {
-		params.FrequencyPenalty = openai.Float(*c.config.LLM.FrequencyPenalty)
+	if c.pc.FrequencyPenalty != nil {
+		params.FrequencyPenalty = openai.Float(*c.pc.FrequencyPenalty)
 	}
 
-	if len(c.config.LLM.Stop) > 0 {
+	if len(c.pc.Stop) > 0 {
 		// OpenAI Stop parameter can be string or array - use array form
 		params.Stop = openai.ChatCompletionNewParamsStopUnion{
-			OfStringArray: c.config.LLM.Stop,
+			OfStringArray: c.pc.Stop,
 		}
 	}
 
@@ -257,17 +305,19 @@ func (c *OpenAIClient) SendMessage(ctx context.Context, messages []chat.Message,
 		params.Tools = convertToolsToOpenAI(tools)
 	}
 
-	// Pass thinking overrides as extra body fields for endpoints that support it
-	// (e.g. qwen3 via vLLM/Ollama: enable_thinking + thinking_budget_tokens).
+	// Route thinking/reasoning to the right mechanism depending on endpoint.
 	sendExtraFields := map[string]any{}
-	if ov != nil && ov.EnableThinking != nil {
-		sendExtraFields["enable_thinking"] = *ov.EnableThinking
-		sendExtraFields["thinking_budget_tokens"] = func() int {
-			if ov.ThinkingBudgetTokens != nil {
-				return *ov.ThinkingBudgetTokens
+	if ov != nil && ov.EnableThinking != nil && *ov.EnableThinking {
+		if isOpenAIAPI(c.pc.APIURL) {
+			if isReasoningModel(sendModel) {
+				params.ReasoningEffort = thinkingBudgetToReasoningEffort(ov.ThinkingBudgetTokens)
 			}
-			return 0
-		}()
+		} else {
+			sendExtraFields["enable_thinking"] = true
+			if ov.ThinkingBudgetTokens != nil && *ov.ThinkingBudgetTokens > 0 {
+				sendExtraFields["thinking_budget_tokens"] = *ov.ThinkingBudgetTokens
+			}
+		}
 	}
 	// Apply response_format if provided.
 	if ov != nil && len(ov.ResponseFormat) > 0 {
@@ -344,19 +394,19 @@ func (c *OpenAIClient) StreamMessage(ctx context.Context, messages []chat.Messag
 	// Merge global config with per-session overrides from context.
 	o := OverridesFromContext(ctx)
 
-	temperature := c.config.LLM.Temperature
+	temperature := c.pc.Temperature
 	if o != nil && o.Temperature != nil {
 		temperature = o.Temperature
 	}
-	topP := c.config.LLM.TopP
+	topP := c.pc.TopP
 	if o != nil && o.TopP != nil {
 		topP = o.TopP
 	}
-	maxTokens := int64(c.config.LLM.MaxTokens)
+	maxTokens := int64(c.pc.MaxTokens)
 	if o != nil && o.MaxTokens != nil {
 		maxTokens = int64(*o.MaxTokens)
 	}
-	model := c.config.LLM.Model
+	model := c.pc.Model
 	if o != nil && o.Model != nil {
 		model = *o.Model
 	}
@@ -373,15 +423,15 @@ func (c *OpenAIClient) StreamMessage(ctx context.Context, messages []chat.Messag
 	if topP != nil {
 		params.TopP = openai.Float(*topP)
 	}
-	if c.config.LLM.PresencePenalty != nil {
-		params.PresencePenalty = openai.Float(*c.config.LLM.PresencePenalty)
+	if c.pc.PresencePenalty != nil {
+		params.PresencePenalty = openai.Float(*c.pc.PresencePenalty)
 	}
-	if c.config.LLM.FrequencyPenalty != nil {
-		params.FrequencyPenalty = openai.Float(*c.config.LLM.FrequencyPenalty)
+	if c.pc.FrequencyPenalty != nil {
+		params.FrequencyPenalty = openai.Float(*c.pc.FrequencyPenalty)
 	}
-	if len(c.config.LLM.Stop) > 0 {
+	if len(c.pc.Stop) > 0 {
 		params.Stop = openai.ChatCompletionNewParamsStopUnion{
-			OfStringArray: c.config.LLM.Stop,
+			OfStringArray: c.pc.Stop,
 		}
 	}
 
@@ -390,16 +440,24 @@ func (c *OpenAIClient) StreamMessage(ctx context.Context, messages []chat.Messag
 		params.Tools = convertToolsToOpenAI(tools)
 	}
 
-	// Pass thinking overrides as extra body fields.
+	// Route thinking/reasoning to the right mechanism depending on endpoint.
 	extraFields := map[string]any{}
-	if o != nil && o.EnableThinking != nil {
-		extraFields["enable_thinking"] = *o.EnableThinking
-		extraFields["thinking_budget_tokens"] = func() int {
-			if o.ThinkingBudgetTokens != nil {
-				return *o.ThinkingBudgetTokens
+	if o != nil && o.EnableThinking != nil && *o.EnableThinking {
+		if isOpenAIAPI(c.pc.APIURL) {
+			if isReasoningModel(model) {
+				params.ReasoningEffort = thinkingBudgetToReasoningEffort(o.ThinkingBudgetTokens)
 			}
-			return 0
-		}()
+			// Non-reasoning OpenAI models don't support thinking; skip silently.
+		} else {
+			// OpenAI-compatible endpoints (Ollama/vLLM/etc.) use extra body fields.
+			// Only send thinking_budget_tokens when explicitly set; absent means
+			// "use the endpoint's default" and avoids hanging on providers (e.g.
+			// Arcee) that don't recognise the field and stall instead of erroring.
+			extraFields["enable_thinking"] = true
+			if o.ThinkingBudgetTokens != nil && *o.ThinkingBudgetTokens > 0 {
+				extraFields["thinking_budget_tokens"] = *o.ThinkingBudgetTokens
+			}
+		}
 	}
 	// Pass tool_choice as an extra field so it works with OpenAI-compatible endpoints.
 	if o != nil && len(o.ToolChoice) > 0 {
@@ -493,25 +551,27 @@ func (c *OpenAIClient) StreamMessage(ctx context.Context, messages []chat.Messag
 			if len(chunk.Choices) > 0 {
 				delta := chunk.Choices[0].Delta
 
-				// Process content - may contain embedded thinking
+				// Check reasoning_content first (Arcee, DeepSeek R1, Qwen3 via
+				// some deployments put thinking here rather than in <think> tags).
+				if rc := extractReasoningContent(delta.RawJSON()); rc != "" {
+					select {
+					case out <- StreamChunk{Thinking: rc}:
+					case <-ctx.Done():
+						out <- StreamChunk{Error: ctx.Err()}
+						return
+					}
+				}
+
+				// Process content - may contain embedded <think> tags.
 				if delta.Content != "" {
-					// Try to extract thinking from content
 					cleanContent, thinkingText := c.extractThinkingFromContent(delta.Content)
-
-					// Prepare the stream chunk
-					streamChunk := StreamChunk{Done: false}
-
-					// Add extracted content (if any)
+					streamChunk := StreamChunk{}
 					if cleanContent != "" {
 						streamChunk.Content = cleanContent
 					}
-
-					// Add extracted thinking (if any)
 					if thinkingText != "" {
 						streamChunk.Thinking = thinkingText
 					}
-
-					// Only send if we have content or thinking
 					if streamChunk.Content != "" || streamChunk.Thinking != "" {
 						select {
 						case out <- streamChunk:
