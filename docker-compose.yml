@@ -181,7 +181,8 @@ services:
     build:
       context: .
       target: apikeyd
-    container_name: stoa-apikeyd
+    deploy:
+      replicas: 1
     mem_limit: 128m
     memswap_limit: 128m
     ports:
@@ -232,10 +233,12 @@ services:
       ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
       OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       GEMINI_API_KEY_FILE: /run/secrets/gemini_api_key
+      ARCEE_API_KEY_FILE: /run/secrets/arcee_api_key
     secrets:
       - anthropic_api_key
       - openai_api_key
       - gemini_api_key
+      - arcee_api_key
     volumes:
       - ./config/llm-proxy.yaml:/etc/llm-proxy/config.yaml:ro
     command: ["-config", "/etc/llm-proxy/config.yaml"]
@@ -305,7 +308,8 @@ services:
     build:
       context: .
       target: authd
-    container_name: stoa-authd
+    deploy:
+      replicas: 1
     mem_limit: 128m
     memswap_limit: 128m
     ports:
@@ -343,6 +347,37 @@ services:
       retries: 6
 
   # ---------------------------------------------------------------------------
+  # nginx — reverse proxy / load balancer
+  # Public-facing entry point. Routes /sessions/* to agentd (sticky by URI
+  # hash), everything else to webd. agentd and webd no longer bind host ports.
+  # ---------------------------------------------------------------------------
+
+  nginx:
+    image: nginx:1.30.0-alpine
+    container_name: stoa-nginx
+    ports:
+      - "8090:8080"
+    volumes:
+      - ./config/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      agentd:
+        condition: service_healthy
+      webd:
+        condition: service_started
+    networks:
+      - agent-external
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+
+  # ---------------------------------------------------------------------------
   # agentd — LLM/MCP/tool daemon
   # Reaches authd for token validation. No DB access. No path to local-idp.
   # ---------------------------------------------------------------------------
@@ -352,20 +387,24 @@ services:
     build:
       context: .
       target: agentd
-    container_name: stoa-agentd
-    mem_limit: 512m
-    memswap_limit: 512m
-    ports:
-      - "7777:7777"
+    deploy:
+      replicas: 1
+    mem_limit: 256m
+    memswap_limit: 256m
     environment:
-      # LLM provider
+      # LLM provider — env var names here match api_key_env/api_url_env in config YAML.
+      # The podman secret name (e.g. anthropic_api_key) is decoupled from the env var
+      # name (e.g. GATEWAY_API_KEY_FILE); you can rename one without touching the other.
       LLM_PROVIDER: ${LLM_PROVIDER}
+      GATEWAY_API_KEY_FILE: /run/secrets/gateway_api_key
+      GATEWAY_API_URL: ${GATEWAY_API_URL}
       ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
       ANTHROPIC_API_URL: ${ANTHROPIC_API_URL}
-      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL}
       OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       OPENAI_API_URL: ${OPENAI_API_URL}
       OPENAI_MODEL: ${OPENAI_MODEL}
+      ARCEE_API_KEY_FILE: /run/secrets/arcee_api_key
+      ARCEE_API_URL: ${ARCEE_API_URL}
 
       # Conversation titling
       TITLING_ENABLED: ${TITLING_ENABLED}
@@ -396,6 +435,14 @@ services:
       # Session persistence
       AGENTD_SESSION_DIR: /app/sessions
 
+      # Attachment secret and S3 credentials — passed through to mcp-attachments containers.
+      ATTACHMENT_SECRET: ${ATTACHMENT_SECRET}
+      GARAGE_S3_ENDPOINT: http://garage:3900
+      GARAGE_S3_REGION: garage
+      GARAGE_S3_BUCKET: ${GARAGE_BUCKET}
+      GARAGE_S3_ACCESS_KEY_ID: ${GARAGE_ACCESS_KEY_ID}
+      GARAGE_S3_SECRET_ACCESS_KEY: ${GARAGE_SECRET_ACCESS_KEY}
+
       # Squid proxy
       AGENTD_SQUID_CONF_PATH: /app/squid/squid.conf
       MCP_PROXY_ADDRESS: "http://stoa-squid:3128"
@@ -413,9 +460,17 @@ services:
         condition: service_healthy
       postgres-agentd:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7777/acp/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
     secrets:
-      - anthropic_api_key
+      - gateway_api_key
       - openai_api_key
+      - arcee_api_key
+      - anthropic_api_key
     networks:
       - agent-external
       - agentd-db-net
@@ -427,6 +482,52 @@ services:
       - no-new-privileges:true
 
   # ---------------------------------------------------------------------------
+  # garage — S3-compatible object storage (file uploads)
+  # ---------------------------------------------------------------------------
+
+  garage:
+    image: dxflrs/garage:v2.3.0
+    container_name: stoa-garage
+    volumes:
+      - ./config/garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    environment:
+      GARAGE_ALLOW_WORLD_READABLE_SECRETS: "true"
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN}
+    networks:
+      - agent-external
+    restart: unless-stopped
+    # No healthcheck: the scratch-based image has no shell or HTTP tools available.
+    # garage-init (below) polls the admin HTTP API and is the real readiness gate.
+
+  # One-shot init: creates layout, bucket, and access key on first boot.
+  # Built from alpine:3.20 + the garage binary (copied from the garage image) so
+  # the init script can use the garage CLI over RPC without needing the admin HTTP API.
+  # restart: on-failure retries until garage's RPC port is ready.
+  garage-init:
+    image: garage-init:local
+    build:
+      context: .
+      dockerfile: Dockerfile.garage-init
+    container_name: stoa-garage-init
+    volumes:
+      - ./scripts/garage-init.sh:/garage-init.sh:ro
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN}
+      GARAGE_BUCKET: ${GARAGE_BUCKET}
+      GARAGE_ACCESS_KEY_ID: ${GARAGE_ACCESS_KEY_ID}
+      GARAGE_SECRET_ACCESS_KEY: ${GARAGE_SECRET_ACCESS_KEY}
+    entrypoint: ["/bin/sh", "/garage-init.sh"]
+    networks:
+      - agent-external
+    restart: on-failure
+    depends_on:
+      - garage
+
+  # ---------------------------------------------------------------------------
   # webd — web UI BFF (serves Svelte SPA, cookie auth, WebSocket proxy)
   # ---------------------------------------------------------------------------
 
@@ -435,25 +536,26 @@ services:
     build:
       context: .
       target: webd
-    container_name: stoa-webd
+    deploy:
+      replicas: 1
     mem_limit: 128m
     memswap_limit: 128m
-    ports:
-      - "3000:3000"
     environment:
       WEBD_EXTERNAL_URL: ${WEBD_EXTERNAL_URL}
       WEBD_AUTHD_URL: http://authd:8888
       WEBD_AGENTD_URL: http://agentd:7777
       WEBD_APIKEYD_URL: http://apikeyd:8889
-      WEBD_COOKIE_SECRET: ${WEBD_COOKIE_SECRET}
-      WEBD_UPLOAD_DIR: /tmp/mcp-workspace/web-uploads
-    volumes:
-      - mcp-workspace:/tmp/mcp-workspace
+      WEBD_S3_ENDPOINT: http://garage:3900
+      WEBD_S3_REGION: garage
+      WEBD_S3_BUCKET: ${GARAGE_BUCKET}
+      WEBD_S3_ACCESS_KEY_ID: ${GARAGE_ACCESS_KEY_ID}
+      WEBD_S3_SECRET_ACCESS_KEY: ${GARAGE_SECRET_ACCESS_KEY}
+      ATTACHMENT_SECRET: ${ATTACHMENT_SECRET}
     depends_on:
       authd:
         condition: service_healthy
       agentd:
-        condition: service_started
+        condition: service_healthy
     networks:
       - agent-external
     restart: unless-stopped
@@ -777,9 +879,13 @@ networks:
 secrets:
   anthropic_api_key:
     external: true
+  gateway_api_key:
+    external: true
   openai_api_key:
     external: true
   gemini_api_key:
+    external: true
+  arcee_api_key:
     external: true
 
 # =============================================================================
@@ -795,3 +901,5 @@ volumes:
   mcp-workspace:
   mcp-shell-workspace:
   squid-cache:
+  garage-meta:
+  garage-data:

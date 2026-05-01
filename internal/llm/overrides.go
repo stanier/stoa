@@ -19,8 +19,15 @@ type Overrides struct {
 	TopP                 *float64 `json:"top_p,omitempty"`
 	TopK                 *int     `json:"top_k,omitempty"`
 	MaxTokens            *int     `json:"max_tokens,omitempty"`
+	// EnableThinking activates extended thinking for Anthropic (native) and
+	// reasoning_effort for OpenAI o-series models. Does not affect other
+	// OpenAI-compatible endpoints — use EnableOAIThinking for those.
 	EnableThinking       *bool    `json:"enable_thinking,omitempty"`
 	ThinkingBudgetTokens *int     `json:"thinking_budget_tokens,omitempty"`
+	// EnableOAIThinking sends enable_thinking=true as an extra body field to
+	// OpenAI-compatible endpoints (e.g. Qwen3/vLLM) that require it to activate
+	// chain-of-thought reasoning. Has no effect on api.openai.com or Anthropic.
+	EnableOAIThinking *bool `json:"enable_oai_thinking,omitempty"`
 	// Provider selects a named provider from the registry (e.g. "anthropic-opus").
 	// Empty string means use the default server provider.
 	Provider *string `json:"provider,omitempty"`

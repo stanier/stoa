@@ -23,6 +23,7 @@ type Server struct {
 	mux        *http.ServeMux
 	httpClient *http.Client
 	wsUpgrader websocket.Upgrader
+	s3         *s3Clients // nil when S3 is not configured (local-dev fallback)
 }
 
 // NewServer constructs a fully-wired Server.
@@ -41,6 +42,15 @@ func NewServer(cfg *Config) (*Server, error) {
 			},
 		},
 	}
+
+	if cfg.S3.Endpoint != "" {
+		sc, err := newS3Clients(cfg.S3)
+		if err != nil {
+			return nil, err
+		}
+		s.s3 = sc
+	}
+
 	s.registerRoutes()
 	return s, nil
 }

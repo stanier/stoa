@@ -35,26 +35,26 @@ func (c *ModelCommand) Execute(ctx context.Context, args []string, state *skills
 	var message string
 
 	if state.Config != nil {
-		provider := state.Config.LLM.Provider
-		if provider == "" {
-			provider = "openai"
-		}
-
+		dp := state.Config.LLM.DefaultProvider()
+		if dp == nil {
+			message = "No LLM provider configured"
+		} else {
 		temp := 1.0
-		if state.Config.LLM.Temperature != nil {
-			temp = *state.Config.LLM.Temperature
+		if dp.Temperature != nil {
+			temp = *dp.Temperature
 		}
 
 		message = fmt.Sprintf("Current Configuration:\n"+
-			"  Provider: %s\n"+
+			"  Provider: %s (%s)\n"+
 			"  Model: %s\n"+
 			"  API URL: %s\n"+
 			"  Max Tokens: %d\n"+
 			"  Temperature: %.1f",
-			provider,
-			state.Config.LLM.Model,
-			state.Config.LLM.APIURL,
-			state.Config.LLM.MaxTokens,
+			dp.Name,
+			dp.Type,
+			dp.Model,
+			dp.APIURL,
+			dp.MaxTokens,
 			temp,
 		)
 
@@ -70,6 +70,7 @@ func (c *ModelCommand) Execute(ctx context.Context, args []string, state *skills
 				state.Config.Compaction.KeepRecent,
 			)
 		}
+		} // end else dp != nil
 	} else {
 		message = "No configuration available"
 	}

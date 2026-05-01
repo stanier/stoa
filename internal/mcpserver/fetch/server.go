@@ -26,6 +26,7 @@ const (
 type Server struct {
 	mcpserver.BaseServer
 	allowedDomains []string
+	allowedHosts   map[string]bool // hosts exempt from the private-IP SSRF check
 	maxBytes       int64
 	timeout        time.Duration
 	userAgent      string
@@ -36,6 +37,7 @@ type Server struct {
 // Config holds optional server configuration.
 type Config struct {
 	AllowedDomains []string
+	AllowedHosts   []string // trusted internal hostnames exempt from private-IP check
 	MaxBytes       int64
 	TimeoutSecs    int
 	UserAgent      string
@@ -53,9 +55,15 @@ func NewServer(name, version string, cfg Config) *Server {
 		cfg.UserAgent = defaultUserAgent
 	}
 
+	allowedHosts := make(map[string]bool, len(cfg.AllowedHosts))
+	for _, h := range cfg.AllowedHosts {
+		allowedHosts[strings.ToLower(h)] = true
+	}
+
 	s := &Server{
 		BaseServer:     mcpserver.BaseServer{Name: name, Version: version},
 		allowedDomains: cfg.AllowedDomains,
+		allowedHosts:   allowedHosts,
 		maxBytes:       cfg.MaxBytes,
 		timeout:        time.Duration(cfg.TimeoutSecs) * time.Second,
 		userAgent:      cfg.UserAgent,
@@ -81,10 +89,17 @@ func NewServer(name, version string, cfg Config) *Server {
 // It checks the hostname before DNS resolution (to catch "localhost", "ip6-localhost",
 // etc.) and also checks all resolved IPs (to catch private IP literals and DNS
 // rebinding where the hostname resolves to a private address).
+// Hosts in s.allowedHosts bypass the private-IP check — use for trusted internal
+// services (e.g. Garage S3) that must be reachable from the container network.
 func (s *Server) safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
+	}
+	// Trusted internal hosts bypass the private-IP check entirely.
+	if s.allowedHosts[strings.ToLower(host)] {
+		d := &net.Dialer{}
+		return d.DialContext(ctx, network, net.JoinHostPort(host, port))
 	}
 	// Pre-DNS hostname check: block well-known loopback hostnames.
 	switch strings.ToLower(host) {

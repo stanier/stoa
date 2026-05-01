@@ -16,39 +16,40 @@ import (
 // AnthropicClient implements the Client interface using the Anthropic API
 type AnthropicClient struct {
 	client anthropic.Client
-	config *config.Config
+	pc     *config.LLMProviderConfig
 }
 
 // NewAnthropicClientSimple creates an Anthropic client with minimal parameters.
-// Useful for proxy and other lightweight consumers that don't have a full config.Config.
+// Useful for proxy and other lightweight consumers that don't have a full config.
 // httpClient may be nil to use the SDK default.
 func NewAnthropicClientSimple(apiKey, apiURL, defaultModel string, defaultMaxTokens int, httpClient *http.Client) (*AnthropicClient, error) {
-	cfg := &config.Config{}
-	cfg.LLM.Provider = "anthropic"
-	cfg.LLM.APIKey = apiKey
-	cfg.LLM.APIURL = apiURL
-	cfg.LLM.Model = defaultModel
-	cfg.LLM.MaxTokens = defaultMaxTokens
-	return newAnthropicClientWithHTTP(cfg, httpClient)
+	pc := &config.LLMProviderConfig{
+		Type:      "anthropic",
+		APIKey:    apiKey,
+		APIURL:    apiURL,
+		Model:     defaultModel,
+		MaxTokens: defaultMaxTokens,
+	}
+	return newAnthropicClientWithHTTP(pc, httpClient)
 }
 
-// NewAnthropicClient creates a new Anthropic client
-func NewAnthropicClient(cfg *config.Config) (*AnthropicClient, error) {
-	return newAnthropicClientWithHTTP(cfg, nil)
+// NewAnthropicClient creates a new Anthropic client from a provider config entry.
+func NewAnthropicClient(pc *config.LLMProviderConfig) (*AnthropicClient, error) {
+	return newAnthropicClientWithHTTP(pc, nil)
 }
 
-func newAnthropicClientWithHTTP(cfg *config.Config, httpClient *http.Client) (*AnthropicClient, error) {
-	if cfg == nil {
-		return nil, fmt.Errorf("config is required")
+func newAnthropicClientWithHTTP(pc *config.LLMProviderConfig, httpClient *http.Client) (*AnthropicClient, error) {
+	if pc == nil {
+		return nil, fmt.Errorf("provider config is required")
 	}
 
 	opts := []option.RequestOption{
-		option.WithAPIKey(cfg.LLM.APIKey),
+		option.WithAPIKey(pc.APIKey),
 	}
 
 	const defaultAnthropicURL = "https://api.anthropic.com"
-	if cfg.LLM.APIURL != "" && cfg.LLM.APIURL != defaultAnthropicURL {
-		opts = append(opts, option.WithBaseURL(cfg.LLM.APIURL))
+	if pc.APIURL != "" && pc.APIURL != defaultAnthropicURL {
+		opts = append(opts, option.WithBaseURL(pc.APIURL))
 	}
 	if httpClient != nil {
 		opts = append(opts, option.WithHTTPClient(httpClient))
@@ -58,7 +59,7 @@ func newAnthropicClientWithHTTP(cfg *config.Config, httpClient *http.Client) (*A
 
 	return &AnthropicClient{
 		client: client,
-		config: cfg,
+		pc:     pc,
 	}, nil
 }
 
@@ -130,7 +131,7 @@ func (c *AnthropicClient) SendMessage(ctx context.Context, messages []chat.Messa
 
 	// Merge model override from context if present.
 	ov := OverridesFromContext(ctx)
-	sendModel := c.config.LLM.Model
+	sendModel := c.pc.Model
 	if ov != nil && ov.Model != nil {
 		sendModel = *ov.Model
 	}
@@ -139,7 +140,7 @@ func (c *AnthropicClient) SendMessage(ctx context.Context, messages []chat.Messa
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(sendModel),
 		Messages:  apiMessages,
-		MaxTokens: int64(c.config.LLM.MaxTokens),
+		MaxTokens: int64(c.pc.MaxTokens),
 	}
 
 	// Add tools if provided
@@ -148,20 +149,20 @@ func (c *AnthropicClient) SendMessage(ctx context.Context, messages []chat.Messa
 	}
 
 	// Add optional parameters only if configured
-	if c.config.LLM.Temperature != nil {
-		params.Temperature = anthropic.Float(*c.config.LLM.Temperature)
+	if c.pc.Temperature != nil {
+		params.Temperature = anthropic.Float(*c.pc.Temperature)
 	}
 
-	if c.config.LLM.TopP != nil {
-		params.TopP = anthropic.Float(*c.config.LLM.TopP)
+	if c.pc.TopP != nil {
+		params.TopP = anthropic.Float(*c.pc.TopP)
 	}
 
-	if c.config.LLM.TopK != nil {
-		params.TopK = anthropic.Int(int64(*c.config.LLM.TopK))
+	if c.pc.TopK != nil {
+		params.TopK = anthropic.Int(int64(*c.pc.TopK))
 	}
 
-	if len(c.config.LLM.Stop) > 0 {
-		params.StopSequences = c.config.LLM.Stop
+	if len(c.pc.Stop) > 0 {
+		params.StopSequences = c.pc.Stop
 	}
 
 	// Add system prompt if present
@@ -246,7 +247,7 @@ func (c *AnthropicClient) StreamMessage(ctx context.Context, messages []chat.Mes
 
 	// Create message parameters — MaxTokens set below after merging overrides.
 	params := anthropic.MessageNewParams{
-		Model:    anthropic.Model(c.config.LLM.Model),
+		Model:    anthropic.Model(c.pc.Model),
 		Messages: apiMessages,
 	}
 
@@ -259,30 +260,30 @@ func (c *AnthropicClient) StreamMessage(ctx context.Context, messages []chat.Mes
 	// Overrides take precedence over global config values.
 	o := OverridesFromContext(ctx)
 
-	temperature := c.config.LLM.Temperature
+	temperature := c.pc.Temperature
 	if o != nil && o.Temperature != nil {
 		temperature = o.Temperature
 	}
-	topP := c.config.LLM.TopP
+	topP := c.pc.TopP
 	if o != nil && o.TopP != nil {
 		topP = o.TopP
 	}
-	topK := c.config.LLM.TopK
+	topK := c.pc.TopK
 	if o != nil && o.TopK != nil {
 		topK = o.TopK
 	}
-	maxTokens := int64(c.config.LLM.MaxTokens)
+	maxTokens := int64(c.pc.MaxTokens)
 	if o != nil && o.MaxTokens != nil {
 		maxTokens = int64(*o.MaxTokens)
 	}
 	if o != nil && o.Model != nil {
 		params.Model = anthropic.Model(*o.Model)
 	}
-	enableThinking := c.config.LLM.EnableThinking
+	enableThinking := c.pc.EnableThinking
 	if o != nil && o.EnableThinking != nil {
 		enableThinking = o.EnableThinking
 	}
-	thinkingBudget := c.config.LLM.ThinkingBudgetTokens
+	thinkingBudget := c.pc.ThinkingBudgetTokens
 	if o != nil && o.ThinkingBudgetTokens != nil {
 		thinkingBudget = o.ThinkingBudgetTokens
 	}
@@ -298,8 +299,8 @@ func (c *AnthropicClient) StreamMessage(ctx context.Context, messages []chat.Mes
 	if topK != nil {
 		params.TopK = anthropic.Int(int64(*topK))
 	}
-	if len(c.config.LLM.Stop) > 0 {
-		params.StopSequences = c.config.LLM.Stop
+	if len(c.pc.Stop) > 0 {
+		params.StopSequences = c.pc.Stop
 	}
 	if enableThinking != nil && *enableThinking {
 		budget := 10000

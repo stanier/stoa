@@ -1,8 +1,12 @@
 package webd
 
 import (
+	"bytes"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +14,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 const (
@@ -18,15 +25,19 @@ const (
 )
 
 // UploadResult is returned to the browser after a successful upload.
+// AttachmentID is an opaque HMAC-signed token (S3 mode) that the agent passes
+// to the read_attachment MCP tool — the agent never sees a URL or S3 key.
+// Path is set only in local-filesystem fallback mode (dev/single-node).
 type UploadResult struct {
-	Path string `json:"path"` // absolute path inside the container (accessible to MCP tools)
-	Name string `json:"name"` // original filename
-	Size int64  `json:"size"` // bytes
+	AttachmentID string `json:"attachment_id,omitempty"` // opaque token (S3 mode)
+	Path         string `json:"path,omitempty"`          // local filesystem path (fallback mode)
+	Name         string `json:"name"`
+	Size int64  `json:"size"`
 }
 
 // handleUpload handles POST /api/upload (multipart/form-data, field "file").
-// Saves the file to the configured upload directory and returns metadata the
-// client embeds as a reference in the message content.
+// In S3 mode: stores the object in S3 and returns a presigned GET URL.
+// In fallback mode: saves to the local upload directory and returns a path.
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -51,52 +62,95 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uploadDir := s.uploadDir()
-	if err := os.MkdirAll(uploadDir, 0755); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	// Prefix filename with a random token to avoid collisions and path traversal.
-	safeName := sanitizeFilename(header.Filename)
 	token, err := randomPrefix()
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	destName := token + "_" + safeName
-	destPath := filepath.Join(uploadDir, destName)
+	safeName := sanitizeFilename(header.Filename)
+	objectKey := token + "_" + safeName
 
-	dst, err := os.Create(destPath)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	defer dst.Close()
+	var result UploadResult
+	result.Name = header.Filename
 
-	written, err := io.Copy(dst, file)
-	if err != nil {
-		os.Remove(destPath)
-		http.Error(w, "upload failed", http.StatusInternalServerError)
-		return
+	if s.s3 != nil {
+		attachmentID, written, err := s.uploadToS3(r, objectKey, file, header.Size)
+		if err != nil {
+			http.Error(w, "upload failed", http.StatusInternalServerError)
+			return
+		}
+		result.AttachmentID = attachmentID
+		result.Size = written
+	} else {
+		path, written, err := s.uploadToFilesystem(objectKey, file)
+		if err != nil {
+			http.Error(w, "upload failed", http.StatusInternalServerError)
+			return
+		}
+		result.Path = path
+		result.Size = written
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(UploadResult{
-		Path: destPath,
-		Name: header.Filename,
-		Size: written,
-	})
+	_ = json.NewEncoder(w).Encode(result)
 }
 
-// uploadDir returns the directory where uploaded files are saved.
-func (s *Server) uploadDir() string {
-	base := envOr("WEBD_UPLOAD_DIR", "/tmp/mcp-workspace/"+uploadSubDir)
-	return base
+// uploadToS3 stores the file in S3 and returns an opaque HMAC-signed attachment ID.
+// The ID encodes the S3 key and a MAC so the mcp-attachments server can validate
+// and resolve it without any shared database.
+func (s *Server) uploadToS3(r *http.Request, key string, file io.Reader, size int64) (attachmentID string, written int64, err error) {
+	buf, err := io.ReadAll(io.LimitReader(file, maxUploadSize+1))
+	if err != nil {
+		return "", 0, err
+	}
+	written = int64(len(buf))
+
+	_, err = s.s3.client.PutObject(r.Context(), &s3.PutObjectInput{
+		Bucket:        aws.String(s.s3.cfg.Bucket),
+		Key:           aws.String(key),
+		Body:          bytes.NewReader(buf),
+		ContentLength: aws.Int64(written),
+	})
+	if err != nil {
+		return "", 0, fmt.Errorf("s3 put: %w", err)
+	}
+
+	return makeAttachmentID(s.cfg.AttachmentSecret, s.s3.cfg.Bucket, key), written, nil
+}
+
+// makeAttachmentID returns a compact signed token: hex(hmac[:8]) + "." + base64url(s3_key).
+// The mcp-attachments server verifies the MAC before resolving the key — preventing
+// the agent from requesting arbitrary S3 objects.
+func makeAttachmentID(secret []byte, bucket, s3Key string) string {
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(bucket + ":" + s3Key))
+	macHex := hex.EncodeToString(mac.Sum(nil)[:8])
+	keyEnc := base64.RawURLEncoding.EncodeToString([]byte(s3Key))
+	return macHex + "." + keyEnc
+}
+
+// uploadToFilesystem saves the file locally — dev/single-node fallback only.
+func (s *Server) uploadToFilesystem(name string, file io.Reader) (path string, written int64, err error) {
+	dir := envOr("WEBD_UPLOAD_DIR", "/tmp/mcp-workspace/"+uploadSubDir)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", 0, err
+	}
+	destPath := filepath.Join(dir, name)
+	dst, err := os.Create(destPath)
+	if err != nil {
+		return "", 0, err
+	}
+	defer dst.Close()
+
+	n, err := io.Copy(dst, file)
+	if err != nil {
+		os.Remove(destPath)
+		return "", 0, err
+	}
+	return destPath, n, nil
 }
 
 func sanitizeFilename(name string) string {
-	// Keep only the base name, replace spaces, strip dangerous chars.
 	name = filepath.Base(name)
 	name = strings.ReplaceAll(name, " ", "_")
 	var safe strings.Builder

@@ -1,0 +1,4 @@
+FROM dxflrs/garage:v2.3.0 AS garage-bin
+FROM alpine:3.20
+RUN apk add --no-cache curl
+COPY --from=garage-bin /garage /usr/local/bin/garage

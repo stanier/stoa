@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import Chat from './lib/Chat.svelte'
   import SessionSidebar from './lib/SessionSidebar.svelte'
   import Account from './lib/Account.svelte'
@@ -17,6 +17,17 @@
   let showAgents  = $state(false)
   let searchQuery = $state('')
   let theme       = $state('dark-stone')
+
+  const POOL_CAP = 5
+  let pooledIds = $state([])
+
+  // Keep an LRU pool of mounted Chat instances so switching sessions is instant.
+  // Moving to front on each activation; evicting the tail when over cap.
+  $effect(() => {
+    if (!activeId) return
+    const current = untrack(() => pooledIds)
+    pooledIds = [activeId, ...current.filter(id => id !== activeId)].slice(0, POOL_CAP)
+  })
 
   onMount(async () => {
     const saved = localStorage.getItem('stoa-theme')
@@ -60,6 +71,7 @@
 
   async function deleteSession(id) {
     await fetch(`/api/sessions/${id}`, { method: 'DELETE' })
+    pooledIds = pooledIds.filter(pid => pid !== id)
     if (id === activeId) activeId = null
     await loadSessions()
     if (!activeId && sessions.length > 0) activeId = sessions[0].id
@@ -215,6 +227,7 @@
   @keyframes spin { to { transform: rotate(360deg); } }
 
   .app-shell { display: flex; height: 100dvh; overflow: hidden; }
+  .chat-slot { display: contents; }
 </style>
 
 {#if loading}
@@ -256,10 +269,20 @@
         onBack={() => showAgents = false}
         onOpenChat={(sessionId) => { showAgents = false; activeId = sessionId; loadSessions() }}
       />
-    {:else if activeId}
-      {#key activeId}
-        <Chat {user} sessionId={activeId} sessionTitle={sessions.find(s => s.id === activeId)?.title ?? ''} onSessionEnd={loadSessions} onTitleUpdate={loadSessions} />
-      {/key}
     {/if}
+
+    {#each pooledIds as id (id)}
+      {@const chatActive = !showAccount && !showApiKeys && !showAgents && id === activeId}
+      <div class="chat-slot" style={chatActive ? '' : 'display: none'}>
+        <Chat
+          {user}
+          sessionId={id}
+          sessionTitle={sessions.find(s => s.id === id)?.title ?? ''}
+          onSessionEnd={loadSessions}
+          onTitleUpdate={loadSessions}
+          active={chatActive}
+        />
+      </div>
+    {/each}
   </div>
 {/if}

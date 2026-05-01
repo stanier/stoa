@@ -51,7 +51,7 @@ func (c *CompactCommand) Execute(ctx context.Context, args []string, state *skil
 	}
 
 	// Create token counter
-	tokenCounter, err := compaction.NewTikTokenCounter(state.Config.LLM.Model)
+	tokenCounter, err := compaction.NewTikTokenCounter(func() string { if dp := state.Config.LLM.DefaultProvider(); dp != nil { return dp.Model }; return "" }())
 	if err != nil {
 		return skills.CommandResult{
 			Success: false,

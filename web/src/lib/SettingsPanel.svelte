@@ -45,7 +45,8 @@
       if (config.top_p          != null) patch.top_p                   = config.top_p
       if (config.top_k          != null) patch.top_k                   = config.top_k
       if (config.max_tokens     != null) patch.max_tokens              = config.max_tokens
-      if (config.enable_thinking != null) patch.enable_thinking        = config.enable_thinking
+      if (config.enable_thinking     != null) patch.enable_thinking         = config.enable_thinking
+      if (config.enable_oai_thinking != null) patch.enable_oai_thinking     = config.enable_oai_thinking
       if (config.thinking_budget_tokens != null) patch.thinking_budget_tokens = config.thinking_budget_tokens
       if (config.provider       != null) patch.provider                = config.provider
       if (config.model          != null) patch.model                   = config.model
@@ -264,7 +265,7 @@
     <hr class="divider" />
 
     <div class="toggle-row">
-      <span class="toggle-label">Extended thinking <span style="font-size:0.65rem;color:var(--text5)">(Anthropic)</span></span>
+      <span class="toggle-label">Extended thinking <span style="font-size:0.65rem;color:var(--text5)">(Anthropic / o-series)</span></span>
       <label class="switch">
         <input type="checkbox"
           checked={config.enable_thinking ?? false}
@@ -274,7 +275,18 @@
       </label>
     </div>
 
-    {#if config.enable_thinking}
+    <div class="toggle-row">
+      <span class="toggle-label">Request thinking <span style="font-size:0.65rem;color:var(--text5)">(OpenAI-compatible)</span></span>
+      <label class="switch">
+        <input type="checkbox"
+          checked={config.enable_oai_thinking ?? false}
+          onchange={e => { config.enable_oai_thinking = e.target.checked; mark() }}
+        />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    {#if config.enable_thinking || config.enable_oai_thinking}
       <div class="field">
         <label>Thinking budget tokens</label>
         <input type="number" min="1024" max="100000" step="1024"

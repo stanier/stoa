@@ -1,11 +1,57 @@
 # Container configuration for Chat TUI
 # Mounted read-only at /root/.config/chat-tui/
-# Secrets and model overrides come from environment variables (.env / compose)
+# API credentials and endpoint URL are injected at runtime via the env vars named below.
 
 llm:
-  provider: anthropic
-  max_tokens: 8000
-  # model and api_key/url come from ANTHROPIC_MODEL / ANTHROPIC_API_KEY / ANTHROPIC_API_URL env vars
+  # default names the active provider. When omitted, the first entry is used.
+  default: gateway
+
+  providers:
+    - name: gateway
+      # type controls the wire protocol: "anthropic", "openai" (any compatible endpoint), "gemini"
+      type: anthropic
+
+      # Model to use — set here in YAML; not read from environment variables.
+      model: claude-sonnet-4-5-20250929
+      max_tokens: 8000
+
+      # api_key_env / api_url_env name the env vars that hold credentials and the
+      # endpoint URL. These names must match the *_FILE and URL vars in compose.
+      # The podman secret name (anthropic_api_key) is separate — see docker-compose.yml.
+      api_key_env: GATEWAY_API_KEY   # compose sets GATEWAY_API_KEY_FILE → /run/secrets/anthropic_api_key
+      api_url_env: GATEWAY_API_URL   # set GATEWAY_API_URL=https://api.anthropic.com in .env
+
+      # tls_skip_verify: true   # only needed when using a local proxy with a self-signed cert
+
+      # Optional sampling parameters (uncomment to enable)
+      # temperature: 1.0              # 0.0–2.0
+      # top_p: 0.9                    # 0.0–1.0
+      # top_k: 40                     # Anthropic only
+      # enable_thinking: true         # Anthropic extended thinking
+      # thinking_budget_tokens: 10000
+
+    # Additional providers (e.g. a bigger model for occasional use)
+    # - name: anthropic-opus
+    #   type: anthropic
+    #   model: claude-opus-4-5
+    #   max_tokens: 8000
+    #   api_key_env: ANTHROPIC_API_KEY
+
+    # Arcee AI (OpenAI-compatible)
+    # - name: arcee
+    #   type: openai
+    #   model: arcee-blitz          # or arcee-nova, arcee-spotlight, etc.
+    #   max_tokens: 8000
+    #   api_key_env: ARCEE_API_KEY  # read from podman secret arcee_api_key via _FILE
+    #   api_url_env: ARCEE_API_URL  # set ARCEE_API_URL=https://api.arcee.ai/v2 in .env
+
+# titling:
+#   enabled: true
+#   provider: ""   # name from llm.providers; empty = use default
+#   model: ""      # model ID; empty = provider default (use a fast/cheap model)
+#   prompt: ""     # override the built-in titling system prompt
+#   disable_thinking: true  # suppress extended thinking for the titling call (default true)
+#                           # set false to let the selected provider's enable_thinking apply
 
 ui:
   theme: dark

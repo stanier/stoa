@@ -1,0 +1,60 @@
+# Git metadata
+.git/
+.gitignore
+
+# Secrets and local config — never bake into build layers
+.env
+.env.*
+config/*.yaml
+!config/*.example.yaml
+!config/permissions-default.yaml
+
+# Local build artifacts
+bin/
+agentd
+*.test
+*.out
+
+# Build/runtime caches and data
+build-cache/
+.build-cache/
+cache/
+data/
+scratch/
+tmp/
+
+# Frontend build output (rebuilt inside Docker by web-builder stage)
+internal/webd/dist/
+web/dist/
+web/node_modules/
+node_modules/
+
+# TLS certificates
+*.pem
+*.key
+*.crt
+*.cert
+
+# IDE and OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Claude tooling
+.claude/
+.claude-tmp/
+
+# Logs and traces
+*.log
+*.db
+traces/
+
+# Docs and non-build files (keep README out of build context for cleanliness)
+docs/
+scratch/
+.resources/
+skills/

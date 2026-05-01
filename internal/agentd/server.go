@@ -121,12 +121,14 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		if cfg.Gateway.Cache.RedisURL != "" {
 			logging.Warnf("agentd: redis cache not yet implemented, using memory cache")
 		}
-		providerName := cfg.LLM.Provider
-		if providerName == "" {
-			providerName = "openai"
+		providerName := ""
+		modelName := ""
+		if dp := cfg.LLM.DefaultProvider(); dp != nil {
+			providerName = dp.Name
+			modelName = dp.Model
 		}
 		llmCache = cache.NewMemoryCache(context.Background(), cfg.Gateway.Cache.MaxEntries)
-		llmClient = cache.NewCachingClient(llmClient, llmCache, cfg.Gateway.Cache.TTL, providerName, cfg.LLM.Model)
+		llmClient = cache.NewCachingClient(llmClient, llmCache, cfg.Gateway.Cache.TTL, providerName, modelName)
 		logging.Infof("agentd: response cache enabled (ttl=%s, max_entries=%d)", cfg.Gateway.Cache.TTL, cfg.Gateway.Cache.MaxEntries)
 	}
 
@@ -416,6 +418,51 @@ func (s *Server) loadSessionsFromDB() {
 	}
 }
 
+// loadSessionFromDB fetches a single session from Postgres and registers it in
+// the in-memory map. Returns nil, nil when the session doesn't exist in the DB.
+// Safe to call concurrently: uses a write lock to prevent double-registration.
+func (s *Server) loadSessionFromDB(ctx context.Context, sessionID string) (*Session, error) {
+	ds, err := s.agentDB.GetSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if ds == nil {
+		return nil, nil
+	}
+
+	msgs, err := s.agentDB.GetMessages(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	sess := newSession(ds.ID, ds.Persona, ds.Source, ds.UserID, "", nil)
+	sess.createdAt = ds.CreatedAt
+	sess.lastInputTokens = ds.LastInputTokens
+	sess.totalOutputTokens = ds.TotalOutputTokens
+	sess.title = ds.Title
+	sess.tracer = app.SetupTracer(s.cfg, ds.ID)
+	sess.llmCtx = app.BuildLLMContext(s.cfg, s.skillRegistry, s.promptReg, s.personaReg, ds.Persona, nil, s.agentSkills...)
+
+	if sess.llmCtx.SystemPrompt != "" {
+		sess.messages = append(sess.messages, systemMessage(sess.llmCtx.SystemPrompt))
+	}
+	sess.messages = append(sess.messages, msgs...)
+	sess.persistedMsgCount = nonSystemCount(sess.messages)
+
+	// Write lock: a concurrent goroutine may have already recovered the same
+	// session. Prefer the existing entry to avoid duplicating state.
+	s.mu.Lock()
+	if existing, ok := s.sessions[sessionID]; ok {
+		s.mu.Unlock()
+		return existing, nil
+	}
+	s.sessions[sessionID] = sess
+	s.mu.Unlock()
+
+	logging.Infof("agentd: recovered session %s from Postgres (%d messages)", sessionID, len(msgs))
+	return sess, nil
+}
+
 // nonSystemCount returns the number of non-system messages in a slice.
 func nonSystemCount(msgs []chat.Message) int {
 	n := 0
@@ -477,8 +524,19 @@ func (s *Server) handleSessionSubroute(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 
 	if !ok {
-		http.Error(w, "session not found", http.StatusNotFound)
-		return
+		if s.agentDB != nil {
+			var err error
+			sess, err = s.loadSessionFromDB(r.Context(), sessionID)
+			if err != nil {
+				logging.Errorf("agentd: session recovery for %s: %v", sessionID, err)
+				http.Error(w, "session recovery failed", http.StatusInternalServerError)
+				return
+			}
+		}
+		if sess == nil {
+			http.Error(w, "session not found", http.StatusNotFound)
+			return
+		}
 	}
 
 	// Ownership check: non-service users may not access sessions owned by someone else.

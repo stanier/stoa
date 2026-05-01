@@ -23,26 +23,25 @@ type AnthropicAPITokenCounter struct {
 
 // NewAnthropicAPITokenCounter creates a new Anthropic API token counter
 func NewAnthropicAPITokenCounter(cfg *config.Config) (*AnthropicAPITokenCounter, error) {
-	if cfg == nil || cfg.LLM.APIKey == "" {
+	dp := cfg.LLM.DefaultProvider()
+	if cfg == nil || dp == nil || dp.APIKey == "" {
 		return nil, fmt.Errorf("config and API key required")
 	}
 
-	// Get fallback tiktoken counter
-	fallback, err := NewTikTokenCounter(cfg.LLM.Model)
+	fallback, err := NewTikTokenCounter(dp.Model)
 	if err != nil {
-		// Fallback can be nil if tiktoken fails
 		fallback = nil
 	}
 
-	apiURL := cfg.LLM.APIURL
+	apiURL := dp.APIURL
 	if apiURL == "" {
 		apiURL = "https://api.anthropic.com"
 	}
 
 	return &AnthropicAPITokenCounter{
-		apiKey:     cfg.LLM.APIKey,
+		apiKey:     dp.APIKey,
 		apiURL:     apiURL,
-		model:      cfg.LLM.Model,
+		model:      dp.Model,
 		fallback:   fallback,
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 	}, nil
@@ -152,8 +151,11 @@ type OpenAIAPITokenCounter struct {
 
 // NewOpenAIAPITokenCounter creates a new OpenAI API token counter
 func NewOpenAIAPITokenCounter(cfg *config.Config) (*OpenAIAPITokenCounter, error) {
-	// Get fallback tiktoken counter
-	fallback, err := NewTikTokenCounter(cfg.LLM.Model)
+	model := ""
+	if dp := cfg.LLM.DefaultProvider(); dp != nil {
+		model = dp.Model
+	}
+	fallback, err := NewTikTokenCounter(model)
 	if err != nil {
 		fallback = nil
 	}

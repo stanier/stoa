@@ -52,6 +52,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/mcp-tim
 FROM builder AS build-mcp-fetch
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/mcp-fetch ./cmd/mcp-fetch
 
+FROM builder AS build-mcp-attachments
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/mcp-attachments ./cmd/mcp-attachments
+
 FROM builder AS build-mcp-diff
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/mcp-diff ./cmd/mcp-diff
 
@@ -175,6 +178,15 @@ USER mcp
 COPY --from=build-mcp-fetch /app/mcp-fetch /app/mcp-fetch
 WORKDIR /app
 ENTRYPOINT ["/app/mcp-fetch"]
+
+# MCP Attachments Server (resolves opaque attachment IDs to S3 content)
+FROM alpine:latest AS mcp-attachments
+RUN apk add --no-cache ca-certificates && \
+    adduser -D -u 1000 mcp
+USER mcp
+COPY --from=build-mcp-attachments /app/mcp-attachments /app/mcp-attachments
+WORKDIR /app
+ENTRYPOINT ["/app/mcp-attachments"]
 
 # MCP Diff Server (text/file diffing)
 FROM alpine:latest AS mcp-diff

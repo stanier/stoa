@@ -2,8 +2,11 @@ package agentdb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // Session is a row from agentd_sessions.
@@ -80,6 +83,26 @@ func (d *DB) UpdateStats(ctx context.Context, id string, lastInputTokens, totalO
 func (d *DB) TouchLastActive(ctx context.Context, id string) error {
 	_, err := d.pool.Exec(ctx, `UPDATE agentd_sessions SET last_active_at=now() WHERE id=$1`, id)
 	return err
+}
+
+// GetSession returns a single session by ID, or nil if not found.
+func (d *DB) GetSession(ctx context.Context, id string) (*Session, error) {
+	const q = `
+		SELECT id, COALESCE(user_id,''), persona, source, title, created_at, last_active_at,
+		       last_input_tokens, total_output_tokens
+		FROM agentd_sessions WHERE id=$1`
+	var s Session
+	err := d.pool.QueryRow(ctx, q, id).Scan(
+		&s.ID, &s.UserID, &s.Persona, &s.Source, &s.Title,
+		&s.CreatedAt, &s.LastActiveAt, &s.LastInputTokens, &s.TotalOutputTokens,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("agentdb: get session: %w", err)
+	}
+	return &s, nil
 }
 
 // DeleteSession removes a session and its messages (CASCADE).
