@@ -118,27 +118,41 @@ docs/
 
 ## Provider Configuration
 
-**Anthropic**:
+Provider selection, model choice, and titling options live entirely in the **YAML config** (`~/.config/stoa/config.yaml` or `config/config.yaml`). The `.env` file is only for credentials, endpoint URLs, and TLS settings.
+
+**Anthropic** — example YAML block:
+```yaml
+llm:
+  provider: anthropic
+  model: claude-sonnet-4-5-20250929
+  api_key_env: ANTHROPIC_API_KEY   # which .env var holds the key
+  api_url_env: ANTHROPIC_API_URL   # which .env var holds the endpoint (omit for public API)
+```
 ```bash
-export LLM_PROVIDER="anthropic"
-export ANTHROPIC_API_KEY="sk-ant-..."
-export ANTHROPIC_API_URL="https://api.anthropic.com"  # Optional
-export ANTHROPIC_MODEL="claude-sonnet-4-5-20250929"   # Optional; this is the compiled-in default (may be outdated)
+# .env (credentials/endpoints only)
+ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_API_URL=https://api.anthropic.com   # optional; default is the public endpoint
 ```
 
-**OpenAI** (or compatible endpoints):
+**OpenAI** (or compatible endpoints — Together, Groq, Ollama):
+```yaml
+llm:
+  provider: openai
+  model: gpt-4o
+  api_key_env: OPENAI_API_KEY
+  api_url_env: OPENAI_API_URL   # omit to use the public OpenAI endpoint
+```
 ```bash
-export LLM_PROVIDER="openai"  # or omit, it's the default
-export OPENAI_API_KEY="sk-..."
-export OPENAI_API_URL="https://api.openai.com/v1"  # Optional
-export OPENAI_MODEL="gpt-4o"                        # Optional
+# .env
+OPENAI_API_KEY=sk-...
+OPENAI_API_URL=https://api.openai.com/v1
 ```
 
-For other OpenAI-compatible endpoints (Together, Groq, Ollama), change `OPENAI_API_URL`.
+**Fallback behavior**: if `api_key_env`/`api_url_env` are omitted from the YAML config, the loader falls back to `ANTHROPIC_API_KEY`/`ANTHROPIC_API_URL` (or `OPENAI_*`) automatically.
 
 ## Common Gotchas
 
-1. **Provider-specific env var binding**: Cannot bind both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` to `llm.api_key`. Use conditional binding based on provider.
+1. **Provider/model config is YAML-only**: `LLM_PROVIDER`, `ANTHROPIC_MODEL`, `OPENAI_MODEL`, `TITLING_ENABLED` are no longer read from environment variables. Set `llm.provider`, `llm.model`, and the `titling:` block in the YAML config. Only credentials (`api_key_env`), endpoints (`api_url_env`), and TLS settings belong in `.env`.
 
 2. **Tool calling implementation**: Both OpenAI and Anthropic clients fully support tool calling. The `convertToolsToOpenAI()` and `convertToolsToAnthropic()` functions handle SDK-specific type conversions. Tools registered in the skills registry are automatically available to the LLM.
 
@@ -161,14 +175,14 @@ For other OpenAI-compatible endpoints (Together, Groq, Ollama), change `OPENAI_A
 ## Testing
 
 ```bash
-# Test Anthropic
-make build && LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... ./bin/debug/chat
+# Test Anthropic (set provider/model in ~/.config/stoa/config.yaml first)
+make build && ANTHROPIC_API_KEY=sk-ant-... ./bin/debug/chat
 
 # Test OpenAI
-make build && LLM_PROVIDER=openai OPENAI_API_KEY=sk-... ./bin/debug/chat
+make build && OPENAI_API_KEY=sk-... ./bin/debug/chat
 
-# Test with custom endpoint (e.g., Ollama)
-make build && OPENAI_API_URL=http://localhost:11434/v1 OPENAI_API_KEY=ollama OPENAI_MODEL=llama3.2 ./bin/debug/chat
+# Test with custom endpoint (e.g., Ollama) — set provider/model/api_url_env in YAML
+make build && OPENAI_API_KEY=ollama OPENAI_API_URL=http://localhost:11434/v1 ./bin/debug/chat
 
 # Test MCP filesystem server manually
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"clientInfo":{"name":"test","version":"1.0"}}}' | ./bin/debug/mcp-filesystem -root /tmp

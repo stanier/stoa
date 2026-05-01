@@ -14,29 +14,31 @@ import (
 	"github.com/stanier/stoa/internal/skills"
 )
 
-// SetupLLMClient creates an LLM client based on the configured provider.
-// Returns nil if config is nil or client creation fails (error is logged).
+// SetupLLMClient creates an LLM client for the configured default provider.
+// Returns nil if config is nil, no providers are configured, or client creation fails.
 func SetupLLMClient(cfg *config.Config) llm.Client {
 	if cfg == nil {
+		return nil
+	}
+	dp := cfg.LLM.DefaultProvider()
+	if dp == nil {
 		return nil
 	}
 
 	var client llm.Client
 	var err error
 
-	switch cfg.LLM.Provider {
+	switch dp.Type {
 	case "anthropic":
-		client, err = llm.NewAnthropicClient(cfg)
+		client, err = llm.NewAnthropicClient(dp)
 	case "gemini":
-		client, err = llm.NewGeminiClient(cfg.LLM.APIKey, cfg.LLM.APIURL, cfg.LLM.Model, cfg.LLM.MaxTokens, nil)
-	case "openai":
-		fallthrough // openai and any unrecognized provider use the OpenAI-compatible client
+		client, err = llm.NewGeminiClient(dp.APIKey, dp.APIURL, dp.Model, dp.MaxTokens, nil)
 	default:
-		client, err = llm.NewOpenAIClient(cfg)
+		client, err = llm.NewOpenAIClient(dp)
 	}
 
 	if err != nil {
-		logging.Warnf("Failed to create LLM client (provider %q): %v", cfg.LLM.Provider, err)
+		logging.Warnf("Failed to create LLM client (provider %q): %v", dp.Name, err)
 	}
 	return client
 }
@@ -87,8 +89,10 @@ func BuildLLMContext(
 	model := ""
 	provider := ""
 	if cfg != nil {
-		model = cfg.LLM.Model
-		provider = cfg.LLM.Provider
+		if dp := cfg.LLM.DefaultProvider(); dp != nil {
+			model = dp.Model
+			provider = dp.Type
+		}
 	}
 
 	// Step 1: resolve allowed tool patterns from persona.

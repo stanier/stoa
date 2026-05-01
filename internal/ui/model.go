@@ -403,8 +403,10 @@ func NewWithConfig(cfg *config.Config) Model {
 
 	// Add welcome message with model name
 	modelName := "default"
-	if cfg != nil && cfg.LLM.Model != "" {
-		modelName = cfg.LLM.Model
+	if cfg != nil {
+		if dp := cfg.LLM.DefaultProvider(); dp != nil && dp.Model != "" {
+			modelName = dp.Model
+		}
 	}
 	welcomeMsg := fmt.Sprintf("Welcome to Stoa! Using model: %s", modelName)
 	m.messages = append(m.messages, chat.NewNoteMessage(welcomeMsg))

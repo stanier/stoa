@@ -233,10 +233,12 @@ services:
       ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
       OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       GEMINI_API_KEY_FILE: /run/secrets/gemini_api_key
+      ARCEE_API_KEY_FILE: /run/secrets/arcee_api_key
     secrets:
       - anthropic_api_key
       - openai_api_key
       - gemini_api_key
+      - arcee_api_key
     volumes:
       - ./config/llm-proxy.yaml:/etc/llm-proxy/config.yaml:ro
     command: ["-config", "/etc/llm-proxy/config.yaml"]
@@ -386,18 +388,23 @@ services:
       context: .
       target: agentd
     deploy:
-      replicas: 4
+      replicas: 1
     mem_limit: 256m
     memswap_limit: 256m
     environment:
-      # LLM provider
+      # LLM provider — env var names here match api_key_env/api_url_env in config YAML.
+      # The podman secret name (e.g. anthropic_api_key) is decoupled from the env var
+      # name (e.g. GATEWAY_API_KEY_FILE); you can rename one without touching the other.
       LLM_PROVIDER: ${LLM_PROVIDER}
+      GATEWAY_API_KEY_FILE: /run/secrets/gateway_api_key
+      GATEWAY_API_URL: ${GATEWAY_API_URL}
       ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
       ANTHROPIC_API_URL: ${ANTHROPIC_API_URL}
-      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL}
       OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       OPENAI_API_URL: ${OPENAI_API_URL}
       OPENAI_MODEL: ${OPENAI_MODEL}
+      ARCEE_API_KEY_FILE: /run/secrets/arcee_api_key
+      ARCEE_API_URL: ${ARCEE_API_URL}
 
       # Conversation titling
       TITLING_ENABLED: ${TITLING_ENABLED}
@@ -460,8 +467,10 @@ services:
       retries: 6
       start_period: 15s
     secrets:
-      - anthropic_api_key
+      - gateway_api_key
       - openai_api_key
+      - arcee_api_key
+      - anthropic_api_key
     networks:
       - agent-external
       - agentd-db-net
@@ -528,7 +537,7 @@ services:
       context: .
       target: webd
     deploy:
-      replicas: 4
+      replicas: 1
     mem_limit: 128m
     memswap_limit: 128m
     environment:
@@ -870,9 +879,13 @@ networks:
 secrets:
   anthropic_api_key:
     external: true
+  gateway_api_key:
+    external: true
   openai_api_key:
     external: true
   gemini_api_key:
+    external: true
+  arcee_api_key:
     external: true
 
 # =============================================================================

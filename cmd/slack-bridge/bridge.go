@@ -813,7 +813,11 @@ func (b *Bridge) handleCommand(sess *sessionConn, msg channels.Message, raw, pre
 		}
 
 	case "model":
-		text := fmt.Sprintf("*Provider*: `%s`  *Model*: `%s`", b.cfg.LLM.Provider, b.cfg.LLM.Model)
+		providerType, providerModel := "", ""
+		if dp := b.cfg.LLM.DefaultProvider(); dp != nil {
+			providerType, providerModel = dp.Type, dp.Model
+		}
+		text := fmt.Sprintf("*Provider*: `%s`  *Model*: `%s`", providerType, providerModel)
 		_ = b.channel.SendResponse(msg, text, nil)
 
 	case "help":

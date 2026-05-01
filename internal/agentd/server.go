@@ -121,12 +121,14 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		if cfg.Gateway.Cache.RedisURL != "" {
 			logging.Warnf("agentd: redis cache not yet implemented, using memory cache")
 		}
-		providerName := cfg.LLM.Provider
-		if providerName == "" {
-			providerName = "openai"
+		providerName := ""
+		modelName := ""
+		if dp := cfg.LLM.DefaultProvider(); dp != nil {
+			providerName = dp.Name
+			modelName = dp.Model
 		}
 		llmCache = cache.NewMemoryCache(context.Background(), cfg.Gateway.Cache.MaxEntries)
-		llmClient = cache.NewCachingClient(llmClient, llmCache, cfg.Gateway.Cache.TTL, providerName, cfg.LLM.Model)
+		llmClient = cache.NewCachingClient(llmClient, llmCache, cfg.Gateway.Cache.TTL, providerName, modelName)
 		logging.Infof("agentd: response cache enabled (ttl=%s, max_entries=%d)", cfg.Gateway.Cache.TTL, cfg.Gateway.Cache.MaxEntries)
 	}
 

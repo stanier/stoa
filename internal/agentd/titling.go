@@ -142,14 +142,16 @@ func (s *Server) generateTitle(ctx context.Context, msgs []chat.Message, llmKey 
 		})
 	}
 
-	// Apply overrides: model (if configured), and always disable thinking so a
-	// fast summarisation model doesn't burn tokens on reasoning.
-	thinkingDisabled := false
-	overrides := &llm.Overrides{
-		EnableThinking: &thinkingDisabled,
+	// Apply overrides: model (if configured), and optionally disable thinking.
+	overrides := &llm.Overrides{}
+	if cfg.DisableThinking {
+		thinkingDisabled := false
+		overrides.EnableThinking = &thinkingDisabled
 	}
 	if model == "" {
-		model = s.cfg.LLM.Model
+		if dp := s.cfg.LLM.DefaultProvider(); dp != nil {
+			model = dp.Model
+		}
 	}
 	if model != "" {
 		overrides.Model = &model
