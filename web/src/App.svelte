@@ -17,6 +17,8 @@
   let showAgents  = $state(false)
   let searchQuery = $state('')
   let theme       = $state('dark-stone')
+  let settingsOpen = $state(false)
+  let toolsOpen    = $state(false)
 
   const POOL_CAP = 5
   let pooledIds = $state([])
@@ -281,6 +283,8 @@
           onSessionEnd={loadSessions}
           onTitleUpdate={loadSessions}
           active={chatActive}
+          bind:settingsOpen
+          bind:toolsOpen
         />
       </div>
     {/each}

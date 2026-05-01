@@ -91,16 +91,14 @@
     })
   }
 
-  let { user, sessionId, sessionTitle = '', onSessionEnd, onTitleUpdate, active = true } = $props()
+  let { user, sessionId, sessionTitle = '', onSessionEnd, onTitleUpdate, active = true,
+        settingsOpen = $bindable(false), toolsOpen = $bindable(false) } = $props()
 
   // When this session becomes the active view, scroll to the latest message.
   $effect(() => { if (active) scrollToBottom() })
 
   let liveTitle = $state(sessionTitle)
   $effect(() => { liveTitle = sessionTitle })
-
-  let settingsOpen  = $state(false)
-  let toolsOpen     = $state(false)
   let messages      = $state([])
   let input         = $state('')
   let connected     = $state(false)
