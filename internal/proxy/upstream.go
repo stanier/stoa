@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/stanier/stoa/internal/chat"
 	"github.com/stanier/stoa/internal/llm"
@@ -169,16 +170,19 @@ func (u *Upstream) Stream(ctx context.Context, messages []chat.Message, tools []
 
 // Router maps inbound model names to upstreams.
 type Router struct {
-	upstreams map[string]*Upstream
-	routes    []RouteConfig
-	fallback  *Upstream // first upstream registered
+	upstreams  map[string]*Upstream
+	routes     []RouteConfig
+	fallback   *Upstream // first upstream registered
+	mu         sync.RWMutex
+	modelIndex map[string]string // model ID → upstream name, populated by ListModels
 }
 
 // NewRouter creates a Router from the upstream and route configs.
 func NewRouter(upstreamCfgs []UpstreamConfig, routes []RouteConfig) (*Router, error) {
 	r := &Router{
-		upstreams: make(map[string]*Upstream),
-		routes:    routes,
+		upstreams:  make(map[string]*Upstream),
+		routes:     routes,
+		modelIndex: make(map[string]string),
 	}
 	for _, uc := range upstreamCfgs {
 		up, err := NewUpstream(uc)
@@ -197,7 +201,8 @@ func NewRouter(upstreamCfgs []UpstreamConfig, routes []RouteConfig) (*Router, er
 }
 
 // Resolve returns the upstream for the given model name.
-// Falls back to the first upstream if no route matches.
+// Checks explicit routes first, then the dynamic model index built from
+// ListModels responses, then falls back to the first upstream.
 func (r *Router) Resolve(model string) *Upstream {
 	for _, route := range r.routes {
 		if route.Model == model || route.Model == "*" {
@@ -206,7 +211,25 @@ func (r *Router) Resolve(model string) *Upstream {
 			}
 		}
 	}
+	r.mu.RLock()
+	upstreamName := r.modelIndex[model]
+	r.mu.RUnlock()
+	if upstreamName != "" {
+		if up, ok := r.upstreams[upstreamName]; ok {
+			return up
+		}
+	}
 	return r.fallback
+}
+
+// IndexModels records model → upstreamName mappings discovered via ListModels.
+// Existing explicit route entries are not overwritten at resolution time.
+func (r *Router) IndexModels(upstreamName string, models []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, m := range models {
+		r.modelIndex[m] = upstreamName
+	}
 }
 
 // ResolveChain returns the primary upstream for model followed by any additional

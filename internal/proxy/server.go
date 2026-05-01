@@ -1092,6 +1092,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			logging.Warnf("proxy: list models from %q: %v", name, err)
 			continue
 		}
+		s.router.IndexModels(name, list)
 		for _, m := range list {
 			models = append(models, modelObj{ID: m, Object: "model", Created: 0})
 		}
