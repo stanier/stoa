@@ -25,6 +25,7 @@ type UpstreamConfig struct {
 	DefaultModel     string `yaml:"default_model"`      // used when request model is empty
 	DefaultMaxTokens int    `yaml:"default_max_tokens"` // used when request max_tokens is absent
 	TLSSkipVerify    bool   `yaml:"tls_skip_verify"`    // skip TLS certificate verification (for self-signed certs)
+	StaticModelsOnly bool   `yaml:"static_models_only"` // when true, skip ListModels — only explicitly configured routes are exposed
 }
 
 // buildHTTPClient returns an *http.Client appropriate for this upstream.

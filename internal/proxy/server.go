@@ -1087,6 +1087,9 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	var models []modelObj
 
 	for name, up := range s.router.upstreams {
+		if up.cfg.StaticModelsOnly {
+			continue
+		}
 		list, err := up.client.ListModels(ctx)
 		if err != nil {
 			logging.Warnf("proxy: list models from %q: %v", name, err)

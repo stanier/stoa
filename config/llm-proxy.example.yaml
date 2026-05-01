@@ -44,6 +44,18 @@ upstreams:
   #   default_model: gemini-2.0-flash
   #   default_max_tokens: 8096
 
+  # static_models_only: true disables automatic model discovery for this upstream.
+  # The provider's /models endpoint is not called; no models are auto-indexed or
+  # exposed in /v1/models. Use this for aggregators like OpenRouter where you
+  # want to control exactly which models are available via explicit routes below.
+  # - name: openrouter
+  #   dialect: openai
+  #   api_url: https://openrouter.ai/api/v1
+  #   api_key_env: OPENROUTER_API_KEY
+  #   default_model: openai/gpt-4o
+  #   default_max_tokens: 4096
+  #   static_models_only: true
+
 routes:
   # Route everything to Anthropic by default.
   # Add model-specific rules above the wildcard to split traffic.
