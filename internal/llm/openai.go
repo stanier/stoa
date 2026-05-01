@@ -308,15 +308,16 @@ func (c *OpenAIClient) SendMessage(ctx context.Context, messages []chat.Message,
 	// Route thinking/reasoning to the right mechanism depending on endpoint.
 	sendExtraFields := map[string]any{}
 	if ov != nil && ov.EnableThinking != nil && *ov.EnableThinking {
-		if isOpenAIAPI(c.pc.APIURL) {
-			if isReasoningModel(sendModel) {
-				params.ReasoningEffort = thinkingBudgetToReasoningEffort(ov.ThinkingBudgetTokens)
-			}
-		} else {
-			sendExtraFields["enable_thinking"] = true
-			if ov.ThinkingBudgetTokens != nil && *ov.ThinkingBudgetTokens > 0 {
-				sendExtraFields["thinking_budget_tokens"] = *ov.ThinkingBudgetTokens
-			}
+		if isOpenAIAPI(c.pc.APIURL) && isReasoningModel(sendModel) {
+			params.ReasoningEffort = thinkingBudgetToReasoningEffort(ov.ThinkingBudgetTokens)
+		}
+		// Non-openai.com / non-o-series: EnableThinking is a no-op.
+		// Use EnableOAIThinking for OpenAI-compatible endpoints.
+	}
+	if ov != nil && ov.EnableOAIThinking != nil && *ov.EnableOAIThinking && !isOpenAIAPI(c.pc.APIURL) {
+		sendExtraFields["enable_thinking"] = true
+		if ov.ThinkingBudgetTokens != nil && *ov.ThinkingBudgetTokens > 0 {
+			sendExtraFields["thinking_budget_tokens"] = *ov.ThinkingBudgetTokens
 		}
 	}
 	// Apply response_format if provided.
@@ -443,20 +444,19 @@ func (c *OpenAIClient) StreamMessage(ctx context.Context, messages []chat.Messag
 	// Route thinking/reasoning to the right mechanism depending on endpoint.
 	extraFields := map[string]any{}
 	if o != nil && o.EnableThinking != nil && *o.EnableThinking {
-		if isOpenAIAPI(c.pc.APIURL) {
-			if isReasoningModel(model) {
-				params.ReasoningEffort = thinkingBudgetToReasoningEffort(o.ThinkingBudgetTokens)
-			}
-			// Non-reasoning OpenAI models don't support thinking; skip silently.
-		} else {
-			// OpenAI-compatible endpoints (Ollama/vLLM/etc.) use extra body fields.
-			// Only send thinking_budget_tokens when explicitly set; absent means
-			// "use the endpoint's default" and avoids hanging on providers (e.g.
-			// Arcee) that don't recognise the field and stall instead of erroring.
-			extraFields["enable_thinking"] = true
-			if o.ThinkingBudgetTokens != nil && *o.ThinkingBudgetTokens > 0 {
-				extraFields["thinking_budget_tokens"] = *o.ThinkingBudgetTokens
-			}
+		if isOpenAIAPI(c.pc.APIURL) && isReasoningModel(model) {
+			params.ReasoningEffort = thinkingBudgetToReasoningEffort(o.ThinkingBudgetTokens)
+		}
+		// Non-openai.com / non-o-series: EnableThinking is a no-op here.
+		// Use EnableOAIThinking for OpenAI-compatible endpoints.
+	}
+	if o != nil && o.EnableOAIThinking != nil && *o.EnableOAIThinking && !isOpenAIAPI(c.pc.APIURL) {
+		// OpenAI-compatible endpoints (Qwen3/vLLM/etc.) that need thinking activated.
+		// Only send thinking_budget_tokens when explicitly set to avoid hanging on
+		// endpoints (e.g. Arcee) that stall on unrecognised fields instead of erroring.
+		extraFields["enable_thinking"] = true
+		if o.ThinkingBudgetTokens != nil && *o.ThinkingBudgetTokens > 0 {
+			extraFields["thinking_budget_tokens"] = *o.ThinkingBudgetTokens
 		}
 	}
 	// Pass tool_choice as an extra field so it works with OpenAI-compatible endpoints.
@@ -537,6 +537,9 @@ func (c *OpenAIClient) StreamMessage(ctx context.Context, messages []chat.Messag
 	out := make(chan StreamChunk, 10)
 
 	// Process stream in goroutine
+	thinkingEnabled := (o != nil && o.EnableThinking != nil && *o.EnableThinking) ||
+		(o != nil && o.EnableOAIThinking != nil && *o.EnableOAIThinking)
+
 	go func() {
 		defer close(out)
 		defer stream.Close()
@@ -551,25 +554,29 @@ func (c *OpenAIClient) StreamMessage(ctx context.Context, messages []chat.Messag
 			if len(chunk.Choices) > 0 {
 				delta := chunk.Choices[0].Delta
 
-				// Check reasoning_content first (Arcee, DeepSeek R1, Qwen3 via
-				// some deployments put thinking here rather than in <think> tags).
-				if rc := extractReasoningContent(delta.RawJSON()); rc != "" {
-					select {
-					case out <- StreamChunk{Thinking: rc}:
-					case <-ctx.Done():
-						out <- StreamChunk{Error: ctx.Err()}
-						return
+				// Extract reasoning_content (Arcee, DeepSeek R1, Qwen3) only when
+				// thinking is enabled; ignore it otherwise.
+				if thinkingEnabled {
+					if rc := extractReasoningContent(delta.RawJSON()); rc != "" {
+						select {
+						case out <- StreamChunk{Thinking: rc}:
+						case <-ctx.Done():
+							out <- StreamChunk{Error: ctx.Err()}
+							return
+						}
 					}
 				}
 
-				// Process content - may contain embedded <think> tags.
+				// Process content. Always run extractThinkingFromContent to keep
+				// inThinkingBlock state consistent and strip <think> tags from content;
+				// only emit the thinking text when thinking is enabled.
 				if delta.Content != "" {
 					cleanContent, thinkingText := c.extractThinkingFromContent(delta.Content)
 					streamChunk := StreamChunk{}
 					if cleanContent != "" {
 						streamChunk.Content = cleanContent
 					}
-					if thinkingText != "" {
+					if thinkingEnabled && thinkingText != "" {
 						streamChunk.Thinking = thinkingText
 					}
 					if streamChunk.Content != "" || streamChunk.Thinking != "" {

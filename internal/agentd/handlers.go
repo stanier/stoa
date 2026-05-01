@@ -949,6 +949,9 @@ func (s *Server) handleSessionConfig(w http.ResponseWriter, r *http.Request, ses
 		if patch.ThinkingBudgetTokens != nil {
 			o.ThinkingBudgetTokens = patch.ThinkingBudgetTokens
 		}
+		if patch.EnableOAIThinking != nil {
+			o.EnableOAIThinking = patch.EnableOAIThinking
+		}
 		if patch.Provider != nil {
 			o.Provider = patch.Provider
 		}
