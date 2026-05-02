@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -206,7 +207,11 @@ func NewRouter(upstreamCfgs []UpstreamConfig, routes []RouteConfig) (*Router, er
 // ListModels responses, then falls back to the first upstream.
 func (r *Router) Resolve(model string) *Upstream {
 	for _, route := range r.routes {
-		if route.Model == model || route.Model == "*" {
+		matched, err := filepath.Match(route.Model, model)
+		if err != nil {
+			continue // malformed pattern — skip
+		}
+		if matched {
 			if up, ok := r.upstreams[route.Upstream]; ok {
 				return up
 			}

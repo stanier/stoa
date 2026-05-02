@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -1088,10 +1089,33 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 
 	for name, up := range s.router.upstreams {
 		if up.cfg.StaticModelsOnly {
-			// Don't call ListModels; emit only the models explicitly wired in routes.
+			// Separate exact routes from glob routes.
+			var globs []string
 			for _, route := range s.router.routes {
-				if route.Upstream == name && route.Model != "*" {
+				if route.Upstream != name || route.Model == "*" {
+					continue
+				}
+				if isGlobPattern(route.Model) {
+					globs = append(globs, route.Model)
+				} else {
 					models = append(models, modelObj{ID: route.Model, Object: "model", Created: 0})
+				}
+			}
+			// Expand glob routes against the provider's model list.
+			if len(globs) > 0 {
+				list, err := up.client.ListModels(ctx)
+				if err != nil {
+					logging.Warnf("proxy: list models from %q: %v", name, err)
+				} else {
+					s.router.IndexModels(name, list)
+					for _, m := range list {
+						for _, pattern := range globs {
+							if matched, _ := filepath.Match(pattern, m); matched {
+								models = append(models, modelObj{ID: m, Object: "model", Created: 0})
+								break
+							}
+						}
+					}
 				}
 			}
 			continue
@@ -1111,6 +1135,11 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		"object": "list",
 		"data":   models,
 	})
+}
+
+// isGlobPattern reports whether s contains any filepath.Match metacharacters.
+func isGlobPattern(s string) bool {
+	return strings.ContainsAny(s, "*?[")
 }
 
 // rateLimitHeaders is the set of upstream headers forwarded to clients so they
