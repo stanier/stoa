@@ -234,11 +234,13 @@ services:
       OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       GEMINI_API_KEY_FILE: /run/secrets/gemini_api_key
       ARCEE_API_KEY_FILE: /run/secrets/arcee_api_key
+      OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
     secrets:
       - anthropic_api_key
       - openai_api_key
       - gemini_api_key
       - arcee_api_key
+      - openrouter_api_key
     volumes:
       - ./config/llm-proxy.yaml:/etc/llm-proxy/config.yaml:ro
     command: ["-config", "/etc/llm-proxy/config.yaml"]
@@ -402,9 +404,10 @@ services:
       ANTHROPIC_API_URL: ${ANTHROPIC_API_URL}
       OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
       OPENAI_API_URL: ${OPENAI_API_URL}
-      OPENAI_MODEL: ${OPENAI_MODEL}
       ARCEE_API_KEY_FILE: /run/secrets/arcee_api_key
       ARCEE_API_URL: ${ARCEE_API_URL}
+      OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
+      OPENROUTER_API_URL: ${OPENROUTER_API_URL}
 
       # Conversation titling
       TITLING_ENABLED: ${TITLING_ENABLED}
@@ -886,6 +889,8 @@ secrets:
   gemini_api_key:
     external: true
   arcee_api_key:
+    external: true
+  openrouter_api_key:
     external: true
 
 # =============================================================================
