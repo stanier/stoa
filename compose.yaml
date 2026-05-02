@@ -1,24 +1,6 @@
 version: '3.8'
 
-# =============================================================================
-# Network topology (auth stack)
-# =============================================================================
-#
-#  postgres-authd-net   (internal) ── postgres-authd, migrate-authd, authd
-#  postgres-localidp-net (internal) ── postgres-localidp, migrate-localidp, local-idp
-#  idp-net              (internal) ── local-idp, authd   (OIDC calls only)
-#  agent-external       (bridge)   ── authd, agentd, zulip-bridge, chat, squid
-#
-# A compromised container can only reach peers on its own network(s).
-# Neither Postgres instance is reachable from agentd, zulip-bridge, or the internet.
-# local-idp has no path to the internet or to agentd.
-
 services:
-
-  # ---------------------------------------------------------------------------
-  # Postgres — one instance per service, each on its own isolated network
-  # ---------------------------------------------------------------------------
-
   postgres-apikeyd:
     image: postgres:16-alpine
     container_name: stoa-postgres-apikeyd
@@ -230,15 +212,11 @@ services:
     ports:
       - "8080:8080"
     environment:
-      ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
-      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
-      GEMINI_API_KEY_FILE: /run/secrets/gemini_api_key
+      VENICE_API_KEY_FILE: /run/secrets/venice_api_key
       ARCEE_API_KEY_FILE: /run/secrets/arcee_api_key
       OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
     secrets:
-      - anthropic_api_key
-      - openai_api_key
-      - gemini_api_key
+      - venice_api_key
       - arcee_api_key
       - openrouter_api_key
     volumes:
@@ -348,15 +326,11 @@ services:
       timeout: 5s
       retries: 6
 
-  # ---------------------------------------------------------------------------
-  # nginx — reverse proxy / load balancer
-  # Public-facing entry point. Routes /sessions/* to agentd (sticky by URI
-  # hash), everything else to webd. agentd and webd no longer bind host ports.
-  # ---------------------------------------------------------------------------
-
   nginx:
     image: nginx:1.30.0-alpine
     container_name: stoa-nginx
+    mem_limit: 128m
+    memswap_limit: 128m
     ports:
       - "8090:8080"
     volumes:
@@ -379,11 +353,6 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # ---------------------------------------------------------------------------
-  # agentd — LLM/MCP/tool daemon
-  # Reaches authd for token validation. No DB access. No path to local-idp.
-  # ---------------------------------------------------------------------------
-
   agentd:
     image: agentd:local
     build:
@@ -400,14 +369,6 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER}
       GATEWAY_API_KEY_FILE: /run/secrets/gateway_api_key
       GATEWAY_API_URL: ${GATEWAY_API_URL}
-      ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
-      ANTHROPIC_API_URL: ${ANTHROPIC_API_URL}
-      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
-      OPENAI_API_URL: ${OPENAI_API_URL}
-      ARCEE_API_KEY_FILE: /run/secrets/arcee_api_key
-      ARCEE_API_URL: ${ARCEE_API_URL}
-      OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
-      OPENROUTER_API_URL: ${OPENROUTER_API_URL}
 
       # Conversation titling
       TITLING_ENABLED: ${TITLING_ENABLED}
@@ -471,9 +432,6 @@ services:
       start_period: 15s
     secrets:
       - gateway_api_key
-      - openai_api_key
-      - arcee_api_key
-      - anthropic_api_key
     networks:
       - agent-external
       - agentd-db-net
@@ -483,10 +441,6 @@ services:
     security_opt:
       - label=disable
       - no-new-privileges:true
-
-  # ---------------------------------------------------------------------------
-  # garage — S3-compatible object storage (file uploads)
-  # ---------------------------------------------------------------------------
 
   garage:
     image: dxflrs/garage:v2.3.0
@@ -502,18 +456,14 @@ services:
     networks:
       - agent-external
     restart: unless-stopped
-    # No healthcheck: the scratch-based image has no shell or HTTP tools available.
-    # garage-init (below) polls the admin HTTP API and is the real readiness gate.
 
-  # One-shot init: creates layout, bucket, and access key on first boot.
-  # Built from alpine:3.20 + the garage binary (copied from the garage image) so
-  # the init script can use the garage CLI over RPC without needing the admin HTTP API.
-  # restart: on-failure retries until garage's RPC port is ready.
   garage-init:
     image: garage-init:local
     build:
       context: .
       dockerfile: Dockerfile.garage-init
+    mem_limit: 128m
+    memswap_limit: 128m
     container_name: stoa-garage-init
     volumes:
       - ./scripts/garage-init.sh:/garage-init.sh:ro
@@ -529,10 +479,6 @@ services:
     restart: on-failure
     depends_on:
       - garage
-
-  # ---------------------------------------------------------------------------
-  # webd — web UI BFF (serves Svelte SPA, cookie auth, WebSocket proxy)
-  # ---------------------------------------------------------------------------
 
   webd:
     image: webd:local
@@ -567,10 +513,6 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # ---------------------------------------------------------------------------
-  # chat — TUI client (disabled by default; enable with --profile chat)
-  # ---------------------------------------------------------------------------
-
   chat:
     profiles: [chat]
     image: chat:local
@@ -594,11 +536,9 @@ services:
     security_opt:
       - label=disable
 
-  # ---------------------------------------------------------------------------
-  # zulip-bridge — Zulip ↔ agentd bridge
-  # ---------------------------------------------------------------------------
-
   zulip-bridge:
+    profiles:
+      - disabled
     image: zulip-bridge:local
     build:
       context: .
@@ -636,11 +576,9 @@ services:
       - label=disable
       - no-new-privileges:true
 
-  # ---------------------------------------------------------------------------
-  # slack-bridge — Slack ↔ agentd bridge
-  # ---------------------------------------------------------------------------
-
   slack-bridge:
+    profiles:
+      - disabled
     image: slack-bridge:local
     build:
       context: .
@@ -676,11 +614,9 @@ services:
       - label=disable
       - no-new-privileges:true
 
-  # ---------------------------------------------------------------------------
-  # discord-bridge — Discord ↔ agentd bridge
-  # ---------------------------------------------------------------------------
-
   discord-bridge:
+    profiles:
+      - disabled
     image: discord-bridge:local
     build:
       context: .
@@ -715,10 +651,9 @@ services:
       - label=disable
       - no-new-privileges:true
 
-  # matrix-bridge — Matrix ↔ agentd bridge
-  # ---------------------------------------------------------------------------
-
   matrix-bridge:
+    profiles:
+      - disabled
     image: matrix-bridge:local
     build:
       context: .
@@ -755,10 +690,6 @@ services:
       - label=disable
       - no-new-privileges:true
 
-  # ---------------------------------------------------------------------------
-  # squid — forward proxy enforcing per-MCP-container domain policy
-  # ---------------------------------------------------------------------------
-
   squid:
     image: ubuntu/squid:latest
     container_name: stoa-squid
@@ -777,10 +708,6 @@ services:
     restart: always
     security_opt:
       - label=disable
-
-# =============================================================================
-# Networks
-# =============================================================================
 
 networks:
 
@@ -867,18 +794,6 @@ networks:
       config:
         - subnet: 172.28.6.0/24
 
-# =============================================================================
-# Secrets
-# =============================================================================
-#
-# These secrets are sourced from environment variables so existing .env-based
-# setups continue to work without change. For production, replace the
-# `environment:` source with `file:` pointing to a secrets manager or file.
-#
-# Containers that need an API key also receive a FOO_KEY_FILE env var pointing
-# to the mounted secret path. config.go reads _FILE vars and uses the file
-# content, falling back to the direct env var if the file is absent.
-
 secrets:
   anthropic_api_key:
     external: true
@@ -892,10 +807,8 @@ secrets:
     external: true
   openrouter_api_key:
     external: true
-
-# =============================================================================
-# Volumes
-# =============================================================================
+  venice_api_key:
+    external: true
 
 volumes:
   postgres-apikeyd-data:
