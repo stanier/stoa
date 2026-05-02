@@ -1088,6 +1088,12 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 
 	for name, up := range s.router.upstreams {
 		if up.cfg.StaticModelsOnly {
+			// Don't call ListModels; emit only the models explicitly wired in routes.
+			for _, route := range s.router.routes {
+				if route.Upstream == name && route.Model != "*" {
+					models = append(models, modelObj{ID: route.Model, Object: "model", Created: 0})
+				}
+			}
 			continue
 		}
 		list, err := up.client.ListModels(ctx)
