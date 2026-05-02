@@ -2,6 +2,7 @@ package agentd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
@@ -399,6 +400,12 @@ func (s *Server) loadSessionsFromDB() {
 		sess.title = ds.Title
 		sess.tracer = app.SetupTracer(s.cfg, ds.ID)
 		sess.llmCtx = app.BuildLLMContext(s.cfg, s.skillRegistry, s.promptReg, s.personaReg, ds.Persona, nil, s.agentSkills...)
+		if len(ds.Overrides) > 0 && string(ds.Overrides) != "{}" {
+			var o llm.Overrides
+			if err := json.Unmarshal(ds.Overrides, &o); err == nil {
+				sess.overrides = &o
+			}
+		}
 
 		if sess.llmCtx.SystemPrompt != "" {
 			sess.messages = append(sess.messages, systemMessage(sess.llmCtx.SystemPrompt))
@@ -442,6 +449,12 @@ func (s *Server) loadSessionFromDB(ctx context.Context, sessionID string) (*Sess
 	sess.title = ds.Title
 	sess.tracer = app.SetupTracer(s.cfg, ds.ID)
 	sess.llmCtx = app.BuildLLMContext(s.cfg, s.skillRegistry, s.promptReg, s.personaReg, ds.Persona, nil, s.agentSkills...)
+	if len(ds.Overrides) > 0 && string(ds.Overrides) != "{}" {
+		var o llm.Overrides
+		if err := json.Unmarshal(ds.Overrides, &o); err == nil {
+			sess.overrides = &o
+		}
+	}
 
 	if sess.llmCtx.SystemPrompt != "" {
 		sess.messages = append(sess.messages, systemMessage(sess.llmCtx.SystemPrompt))

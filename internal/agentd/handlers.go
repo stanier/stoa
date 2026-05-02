@@ -960,6 +960,14 @@ func (s *Server) handleSessionConfig(w http.ResponseWriter, r *http.Request, ses
 		}
 		sess.mu.Unlock()
 
+		if s.agentDB != nil {
+			if data, err := json.Marshal(o); err == nil {
+				if err := s.agentDB.UpdateOverrides(r.Context(), sess.id, data); err != nil {
+					logging.Warnf("agentd: db: update overrides for %s: %v", sess.id, err)
+				}
+			}
+		}
+
 		w.WriteHeader(http.StatusNoContent)
 
 	default:
