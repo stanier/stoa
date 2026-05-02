@@ -86,6 +86,8 @@ services:
   # ---------------------------------------------------------------------------
 
   migrate-apikeyd:
+    profiles:
+      - disabled
     image: apikeyd:local
     build:
       context: .
@@ -104,6 +106,8 @@ services:
     restart: on-failure
 
   migrate-agentd:
+    profiles:
+      - disabled
     image: auth-admin:local
     build:
       context: .
@@ -120,6 +124,8 @@ services:
     restart: on-failure
 
   migrate-authd:
+    profiles:
+      - disabled
     image: auth-admin:local
     build:
       context: .
@@ -137,6 +143,8 @@ services:
     restart: on-failure
 
   migrate-localidp:
+    profiles:
+      - disabled
     image: auth-admin:local
     build:
       context: .
@@ -458,6 +466,8 @@ services:
     restart: unless-stopped
 
   garage-init:
+    profiles:
+      - disabled
     image: garage-init:local
     build:
       context: .
