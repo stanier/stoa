@@ -118,8 +118,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/matrix-
 FROM builder AS build-apikeyd
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/apikeyd ./cmd/apikeyd
 
-FROM builder AS build-llm-proxy
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/llm-proxy ./cmd/llm-proxy
+FROM builder AS build-inference-gateway
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/inference-gateway ./cmd/inference-gateway
 
 # =============================================================================
 # Stage 3: Runtime images
@@ -388,10 +388,10 @@ WORKDIR /app
 EXPOSE 8889
 ENTRYPOINT ["/app/apikeyd"]
 
-# llm-proxy — bidirectional LLM API proxy
-FROM alpine:latest AS llm-proxy
+# inference-gateway — bidirectional LLM API proxy
+FROM alpine:latest AS inference-gateway
 RUN apk add --no-cache ca-certificates
-COPY --from=build-llm-proxy /app/llm-proxy /app/llm-proxy
+COPY --from=build-inference-gateway /app/inference-gateway /app/inference-gateway
 WORKDIR /app
 EXPOSE 8080
-ENTRYPOINT ["/app/llm-proxy"]
+ENTRYPOINT ["/app/inference-gateway"]

@@ -41,7 +41,7 @@ type Server struct {
 
 	// Auth — authdClient is set when AGENTD_AUTHD_URL is configured (production).
 	authdClient   *authdclient.Client
-	apikeydClient *apikeydclient.Client // validates external ACP caller keys (llmp_ prefix)
+	apikeydClient *apikeydclient.Client // validates external ACP caller keys (stoa-infgw_ prefix)
 
 	// loopHooks contains optional callbacks invoked during the agentic loop.
 	loopHooks LoopHooks
@@ -98,12 +98,12 @@ func NewServer(cfg *config.Config) (*Server, error) {
 	// Build multi-provider registry with background model discovery.
 	// Refresh interval: 30 minutes (0 = startup only, no repeating).
 	// Kept for per-session provider override (overrides.Provider); fallback chain
-	// and stats are now handled by llm-proxy.
+	// and stats are now handled by inference-gateway.
 	providerReg := app.SetupProviderRegistry(cfg, context.Background(), 30*time.Minute)
 
 	// If a fallback chain is configured, wrap the default client.
-	// Note: rate limiting and stats are now in llm-proxy. FallbackClient here
-	// is only active when agentd is NOT routing through llm-proxy (e.g. direct
+	// Note: rate limiting and stats are now in inference-gateway. FallbackClient here
+	// is only active when agentd is NOT routing through inference-gateway (e.g. direct
 	// provider access in dev mode).
 	if len(cfg.Gateway.FallbackChain) > 0 {
 		fc := llm.NewFallbackClient(providerReg, cfg.Gateway.FallbackChain)
@@ -229,7 +229,7 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		logging.Infof("agentd: auth via authd at %s", authdURL)
 	}
 
-	// apikeyd — validates external ACP caller keys (llmp_ prefix).
+	// apikeyd — validates external ACP caller keys (stoa-infgw_ prefix).
 	if apikeydURL := envOr("AGENTD_APIKEYD_URL", cfg.Agentd.APIKeydURL); apikeydURL != "" {
 		s.apikeydClient = apikeydclient.New(apikeydURL)
 		logging.Infof("agentd: external ACP key validation via apikeyd at %s", apikeydURL)

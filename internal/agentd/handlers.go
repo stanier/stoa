@@ -1055,7 +1055,7 @@ func (s *Server) handleSessionTools(w http.ResponseWriter, r *http.Request, sess
 }
 
 // handleMetrics handles GET /metrics.
-// Provider health metrics have moved to llm-proxy (/metrics on port 8080).
+// Provider health metrics have moved to inference-gateway (/metrics on port 8080).
 // This endpoint returns cache stats that are still owned by agentd.
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -1086,6 +1086,6 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(jsonResponse{
 		Cache: cs,
-		Note:  "provider health metrics are at llm-proxy /metrics",
+		Note:  "provider health metrics are at inference-gateway /metrics",
 	})
 }

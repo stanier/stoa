@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# test-proxy-key.sh — smoke-test the llm-proxy with an API key using the Anthropic dialect.
+# test-proxy-key.sh — smoke-test the inference-gateway with an API key using the Anthropic dialect.
 #
 # Usage:
 #   ./scripts/test-proxy-key.sh <api-key> [proxy-url]
 #
 # Examples:
-#   ./scripts/test-proxy-key.sh llmp_abc123...
-#   ./scripts/test-proxy-key.sh llmp_abc123... http://localhost:8080
+#   ./scripts/test-proxy-key.sh stoa-infgw_abc123...
+#   ./scripts/test-proxy-key.sh stoa-infgw_abc123... http://localhost:8080
 #
 # The proxy-url defaults to http://localhost:8080.
 # The model is taken from PROXY_TEST_MODEL env var, falling back to whatever
@@ -20,7 +20,7 @@ MODEL="${PROXY_TEST_MODEL:-}"
 
 if [[ -z "$API_KEY" ]]; then
   echo "Usage: $0 <api-key> [proxy-url]" >&2
-  echo "  API key starts with llmp_" >&2
+  echo "  API key starts with stoa-infgw_" >&2
   exit 1
 fi
 

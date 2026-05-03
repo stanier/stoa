@@ -160,7 +160,7 @@ type AgentdConfig struct {
 	SquidConfPath string `mapstructure:"squid_conf_path"`
 
 	// APIKeydURL is the internal URL of the apikeyd service used to validate
-	// external ACP caller API keys (llmp_ prefix).
+	// external ACP caller API keys (stoa-infgw_ prefix).
 	// Example: "http://apikeyd:8889"
 	// When empty, apikeyd-based key validation is disabled.
 	APIKeydURL string `mapstructure:"apikeyd_url"`
@@ -188,7 +188,7 @@ type TitlingConfig struct {
 // LLMProviderConfig describes one named LLM provider.
 // All providers — including the default — are defined under llm.providers in the YAML config.
 type LLMProviderConfig struct {
-	// Name is a unique identifier used when selecting a provider. e.g. "llm-proxy", "anthropic-opus"
+	// Name is a unique identifier used when selecting a provider. e.g. "inference-gateway", "anthropic-opus"
 	Name string `mapstructure:"name"`
 	// Type is "openai" (or any OpenAI-compatible endpoint), "anthropic", or "gemini".
 	Type string `mapstructure:"type"`

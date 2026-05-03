@@ -37,7 +37,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/auth/callback", s.handleCallback)
 	s.mux.HandleFunc("/auth/logout", s.handleLogout)
 
-	// ── Key verification (called by llm-proxy, no session cookie) ────────
+	// ── Key verification (called by inference-gateway, no session cookie) ────────
 	s.mux.HandleFunc("/keys/verify", s.handleVerifyKey)
 
 	// ── Admin endpoints (APIKEYD_ADMIN_TOKEN required) ────────────────────

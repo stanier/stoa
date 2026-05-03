@@ -1,7 +1,7 @@
 // Package proxy implements a bidirectional LLM API proxy that can accept
 // requests in OpenAI or Anthropic format and forward them to upstream
 // providers in either format.
-package proxy
+package inferencegateway
 
 import (
 	"context"
@@ -33,7 +33,7 @@ type GatewayRateLimitConfig struct {
 	RequestsPerMinute int  `yaml:"requests_per_minute"`
 }
 
-// GatewayConfig holds optional gateway-level features for llm-proxy.
+// GatewayConfig holds optional gateway-level features for inference-gateway.
 type GatewayConfig struct {
 	// FallbackChain is an ordered list of upstream names to try when the
 	// primary upstream returns a retryable error.

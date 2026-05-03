@@ -89,7 +89,7 @@ func runAgenticLoop(
 		overrides := sess.overrides
 		sess.mu.Unlock()
 
-		// Inject the per-user llmp_* key so llm-proxy enforces user-scoped quotas.
+		// Inject the per-user stoa-infgw_* key so inference-gateway enforces user-scoped quotas.
 		// The key is provisioned by authd at login and passed in via SessionConfig.
 		if sess.llmKey != "" {
 			if overrides == nil {

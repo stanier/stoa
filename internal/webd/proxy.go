@@ -126,7 +126,7 @@ func (s *Server) handleSessionsProxy(w http.ResponseWriter, r *http.Request) {
 			}
 			body["user_id"] = userID
 
-			// Inject the per-user LLM key so agentd routes calls through llm-proxy
+			// Inject the per-user LLM key so agentd routes calls through inference-gateway
 			// with user-scoped quota enforcement.
 			if llmKey := s.llmKeyFromCookie(r); llmKey != "" {
 				body["llm_key"] = llmKey

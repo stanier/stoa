@@ -32,7 +32,7 @@ Browser / TUI client
   └─────────────────┘
 ```
 
-**Network isolation**: Each Postgres is on a private bridge reachable only by its own service. MCP containers on `mcp-*-net` (all `internal: true`) cannot make direct outbound connections — only via squid. `agent-external` is the only bridge with internet egress, and only agentd, webd, authd, zulip-bridge, and llm-proxy sit on it.
+**Network isolation**: Each Postgres is on a private bridge reachable only by its own service. MCP containers on `mcp-*-net` (all `internal: true`) cannot make direct outbound connections — only via squid. `agent-external` is the only bridge with internet egress, and only agentd, webd, authd, zulip-bridge, and inference-gateway sit on it.
 
 ---
 
@@ -272,7 +272,7 @@ Exposes published agents as an ACP-compatible REST+SSE API.
 
 **Run → session mapping:** each run targets a session. If `session_id` is omitted a new ephemeral session is created and reused for subsequent runs in the same logical conversation by passing the returned `session_id` back.
 
-**Auth:** same Bearer token as the native API. External-visibility agents allow anonymous callers. `apikeyd`-issued keys (`llmp_*`) are accepted when `AGENTD_APIKEYD_URL` is configured.
+**Auth:** same Bearer token as the native API. External-visibility agents allow anonymous callers. `apikeyd`-issued keys (`stoa-infgw_*`) are accepted when `AGENTD_APIKEYD_URL` is configured.
 
 **In-memory run store:** completed/failed/cancelled runs are evicted after 24 h by a background goroutine started in `NewServer`.
 

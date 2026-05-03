@@ -1,4 +1,4 @@
-// llm-proxy is a bidirectional LLM API proxy.
+// inference-gateway is a bidirectional LLM API inferencegateway.
 //
 // It accepts requests in OpenAI or Anthropic format and routes them to
 // configured upstream providers (which can also use either dialect).
@@ -6,12 +6,12 @@
 // Configuration can be provided via a YAML config file (-config flag) or
 // via environment variables for simple single-upstream setups:
 //
-//	PROXY_LISTEN             listen address (default ":8080")
-//	PROXY_UPSTREAM_DIALECT   "openai" or "anthropic"
-//	PROXY_UPSTREAM_URL       upstream API base URL
-//	PROXY_UPSTREAM_KEY       upstream API key
-//	PROXY_UPSTREAM_MODEL     default model for this upstream
-//	PROXY_UPSTREAM_MAX_TOKENS default max tokens (default 4096)
+//	INFGW_LISTEN             listen address (default ":8080")
+//	INFGW_UPSTREAM_DIALECT   "openai" or "anthropic"
+//	INFGW_UPSTREAM_URL       upstream API base URL
+//	INFGW_UPSTREAM_KEY       upstream API key
+//	INFGW_UPSTREAM_MODEL     default model for this upstream
+//	INFGW_UPSTREAM_MAX_TOKENS default max tokens (default 4096)
 package main
 
 import (
@@ -21,7 +21,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/stanier/stoa/internal/proxy"
+	"github.com/stanier/stoa/internal/inferencegateway"
 	"gopkg.in/yaml.v3"
 )
 
@@ -34,7 +34,7 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	srv, err := proxy.NewServer(cfg)
+	srv, err := inferencegateway.NewServer(cfg)
 	if err != nil {
 		log.Fatalf("proxy init: %v", err)
 	}
@@ -44,7 +44,7 @@ func main() {
 		addr = ":8080"
 	}
 
-	log.Printf("llm-proxy listening on %s", addr)
+	log.Printf("inference-gateway listening on %s", addr)
 	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
 		log.Fatalf("server: %v", err)
 	}
@@ -52,35 +52,35 @@ func main() {
 
 // loadConfig reads config from a YAML file if provided, otherwise falls back
 // to environment variables for a single-upstream setup.
-func loadConfig(path string) (proxy.Config, error) {
+func loadConfig(path string) (inferencegateway.Config, error) {
 	if path != "" {
 		f, err := os.Open(path)
 		if err != nil {
-			return proxy.Config{}, err
+			return inferencegateway.Config{}, err
 		}
 		defer f.Close()
-		var cfg proxy.Config
+		var cfg inferencegateway.Config
 		if err := yaml.NewDecoder(f).Decode(&cfg); err != nil {
-			return proxy.Config{}, err
+			return inferencegateway.Config{}, err
 		}
 		return cfg, nil
 	}
 
 	// Fall back to env vars for a quick single-upstream setup.
-	dialect := envOr("PROXY_UPSTREAM_DIALECT", "openai")
-	apiURL := envOr("PROXY_UPSTREAM_URL", "")
-	apiKey := envOr("PROXY_UPSTREAM_KEY", "")
-	model := envOr("PROXY_UPSTREAM_MODEL", "")
-	maxTokens := envInt("PROXY_UPSTREAM_MAX_TOKENS", 4096)
+	dialect := envOr("INFGW_UPSTREAM_DIALECT", "openai")
+	apiURL := envOr("INFGW_UPSTREAM_URL", "")
+	apiKey := envOr("INFGW_UPSTREAM_KEY", "")
+	model := envOr("INFGW_UPSTREAM_MODEL", "")
+	maxTokens := envInt("INFGW_UPSTREAM_MAX_TOKENS", 4096)
 
 	if apiURL == "" && apiKey == "" {
-		log.Fatal("no config file and no PROXY_UPSTREAM_URL / PROXY_UPSTREAM_KEY set — use -config or set env vars")
+		log.Fatal("no config file and no INFGW_UPSTREAM_URL / INFGW_UPSTREAM_KEY set — use -config or set env vars")
 	}
 
-	return proxy.Config{
-		Listen:     envOr("PROXY_LISTEN", ":8080"),
-		APIKeydURL: envOr("PROXY_APIKEYD_URL", ""),
-		Upstreams: []proxy.UpstreamConfig{
+	return inferencegateway.Config{
+		Listen:     envOr("INFGW_LISTEN", ":8080"),
+		APIKeydURL: envOr("INFGW_APIKEYD_URL", ""),
+		Upstreams: []inferencegateway.UpstreamConfig{
 			{
 				Name:             "default",
 				Dialect:          dialect,

@@ -209,7 +209,7 @@ func (s *Server) tokenFromCookie(r *http.Request) string {
 	return c.Value
 }
 
-// llmKeyFromCookie returns the per-user llmp_* key from the LLM key cookie, or "".
+// llmKeyFromCookie returns the per-user stoa-infgw_* key from the LLM key cookie, or "".
 func (s *Server) llmKeyFromCookie(r *http.Request) string {
 	c, err := r.Cookie(llmKeyCookie)
 	if err != nil {

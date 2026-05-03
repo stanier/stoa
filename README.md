@@ -54,7 +54,7 @@ An AI agent platform built around a central daemon (`agentd`) that owns all LLM 
 
 * **MCP servers** — Built-in tool servers implementing the [Model Context Protocol](https://modelcontextprotocol.io): filesystem, memory, fetch, shell, diff, web-search, HTTP, GraphQL, PromQL, NetBox, Trello, Zulip, and an ACP MCP server.
 
-* **llm-proxy** — An OpenAI-compatible passthrough proxy with API key management via `apikeyd`.
+* **inference-gateway** — An OpenAI-compatible passthrough proxy with API key management via `apikeyd`.
 
 ## LLM Providers
 

@@ -45,7 +45,7 @@ type Server struct {
 	verifyLimiter          *ratelimit.Limiter // rate-limits /token/verify by remote IP
 
 	// apikeydClient is set when AUTHD_APIKEYD_URL is configured.
-	// Used to provision per-user llmp_* keys at login time (best-effort).
+	// Used to provision per-user stoa-infgw_* keys at login time (best-effort).
 	apikeydClient     *apikeydclient.Client
 	apikeydAdminToken string
 }
@@ -454,7 +454,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Provision the per-user llmp_* LLM key (best-effort — login succeeds even if apikeyd is down).
+	// Provision the per-user stoa-infgw_* LLM key (best-effort — login succeeds even if apikeyd is down).
 	var llmKey string
 	if s.apikeydClient != nil {
 		if pk, pkErr := s.apikeydClient.ProvisionUserKey(ctx, userID, s.apikeydAdminToken); pkErr != nil {

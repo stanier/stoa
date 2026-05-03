@@ -24,9 +24,9 @@ type SessionConfig struct {
 	// AllowedTools is an optional list of glob patterns restricting which tools
 	// are available in this session. Empty means the persona's full tool set.
 	AllowedTools []string `json:"allowed_tools,omitempty"`
-	// LLMKey is the per-user llmp_* key issued by apikeyd at login.
+	// LLMKey is the per-user stoa-infgw_* key issued by apikeyd at login.
 	// When set, agentd injects it as the API key on outbound LLM calls so
-	// llm-proxy enforces per-user quotas. Populated by webd from the auth cookie.
+	// inference-gateway enforces per-user quotas. Populated by webd from the auth cookie.
 	LLMKey string `json:"llm_key,omitempty"`
 }
 

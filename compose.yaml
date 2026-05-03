@@ -162,7 +162,7 @@ services:
 
   # ---------------------------------------------------------------------------
   # apikeyd — API key management service
-  # Issues and validates llmp_* keys used by downstream apps to access llm-proxy.
+  # Issues and validates stoa-infgw_* keys used by downstream apps to access inference-gateway.
   # Auth flow reuses authd (same OIDC path as webd).
   # ---------------------------------------------------------------------------
 
@@ -205,16 +205,16 @@ services:
       retries: 6
 
   # ---------------------------------------------------------------------------
-  # llm-proxy — bidirectional LLM API proxy (OpenAI / Anthropic / Gemini)
+  # inference-gateway — bidirectional LLM API proxy (OpenAI / Anthropic / Gemini)
   # Validates inbound API keys via apikeyd; forwards to configured upstreams.
   # ---------------------------------------------------------------------------
 
-  llm-proxy:
-    image: llm-proxy:local
+  inference-gateway:
+    image: inference-gateway:local
     build:
       context: .
-      target: llm-proxy
-    container_name: stoa-llm-proxy
+      target: inference-gateway
+    container_name: stoa-inference-gateway
     mem_limit: 128m
     memswap_limit: 128m
     ports:
@@ -228,8 +228,8 @@ services:
       - arcee_api_key
       - openrouter_api_key
     volumes:
-      - ./config/llm-proxy.yaml:/etc/llm-proxy/config.yaml:ro
-    command: ["-config", "/etc/llm-proxy/config.yaml"]
+      - ./config/inference-gateway.yaml:/etc/inference-gateway/config.yaml:ro
+    command: ["-config", "/etc/inference-gateway/config.yaml"]
     depends_on:
       apikeyd:
         condition: service_healthy

@@ -21,9 +21,9 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 
 SECRETS=(
-    "anthropic_api_key:Anthropic API key:sk-ant-:agentd llm-proxy"
-    "openai_api_key:OpenAI API key:sk-:agentd llm-proxy"
-    "gemini_api_key:Gemini API key::llm-proxy"
+    "anthropic_api_key:Anthropic API key:sk-ant-:agentd inference-gateway"
+    "openai_api_key:OpenAI API key:sk-:agentd inference-gateway"
+    "gemini_api_key:Gemini API key::inference-gateway"
 )
 
 # Containers to recreate after any secret changes (deduped at runtime)

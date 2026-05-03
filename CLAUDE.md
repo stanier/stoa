@@ -76,7 +76,7 @@ internal/
 ├── slack/        - Slack API client
 ├── discord/      - Discord API client
 ├── matrix/       - Matrix API client
-├── proxy/        - LLM proxy (OpenAI-compatible passthrough)
+├── inferencegateway/ - Inference gateway (OpenAI-compatible passthrough)
 ├── permissions/  - Permission check/enforcement layer
 ├── ratelimit/    - Rate limiting
 ├── db/           - Shared DB utilities
@@ -103,7 +103,7 @@ cmd/
 ├── discord-bridge/- Discord ↔ agentd bridge
 ├── matrix-bridge/ - Matrix ↔ agentd bridge
 ├── cli-bridge/    - CLI bridge
-├── llm-proxy/     - OpenAI-compatible LLM proxy
+├── inference-gateway/ - OpenAI-compatible LLM proxy
 ├── mcp-acp/       - ACP MCP server
 ├── apikeyd/       - API key service binary
 ├── dump-context/  - Debug tool: dump agentd session context

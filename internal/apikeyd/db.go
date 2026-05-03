@@ -26,7 +26,7 @@ var migrationsFS embed.FS
 
 const RequiredSchemaVersion = 1
 
-const keyPrefix = "llmp_"
+const keyPrefix = "stoa-infgw_"
 
 var (
 	ErrNotFound    = errors.New("apikeyd: key not found")
@@ -272,7 +272,7 @@ func hashKey(rawKey string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// displayPrefix returns the first 8 characters after the "llmp_" prefix,
+// displayPrefix returns the first 8 characters after the "stoa-infgw_" prefix,
 // giving users enough to identify which key a request used.
 func displayPrefix(rawKey string) string {
 	body := rawKey
