@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"log"
 	"time"
@@ -16,17 +15,16 @@ const (
 )
 
 func main() {
+	f               := mcpserver.RegisterCommonFlags()
 	endpoint        := flag.String("endpoint", "", "GraphQL endpoint URL (required)")
 	authHeader      := flag.String("auth", "", "Authorization header value (e.g. 'Bearer token')")
 	allowMutations  := flag.Bool("allow-mutations", false, "Expose graphql_mutate tool (disabled by default)")
 	allowIntrospect := flag.Bool("allow-introspect", true, "Expose graphql_introspect and graphql_describe_type tools")
 	maxRespMB       := flag.Int("max-response-mb", 5, "Maximum response size in megabytes")
 	timeoutSecs     := flag.Int("timeout", 30, "HTTP timeout in seconds")
-	logFile         := flag.String("log", "", "Log file path (empty for stderr)")
-	pingTimeout     := flag.Duration("ping-timeout", 0, "Shut down if no ping received within this duration (0 = disabled)")
 	flag.Parse()
 
-	mcpserver.SetupLogging(*logFile)
+	mcpserver.SetupLogging(*f.LogFile)
 	if *endpoint == "" {
 		log.Fatal("-endpoint is required")
 	}
@@ -45,8 +43,5 @@ func main() {
 		AllowIntrospect:  *allowIntrospect,
 		MaxResponseBytes: int64(*maxRespMB) * 1024 * 1024,
 	}
-	srv := graphql.NewServer(cfg)
-	if err := mcpserver.RunServer(context.Background(), srv, *pingTimeout); err != nil {
-		log.Fatalf("Server error: %v", err)
-	}
+	mcpserver.Serve(graphql.NewServer(cfg), f)
 }

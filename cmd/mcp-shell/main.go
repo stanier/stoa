@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"log"
 
@@ -15,14 +14,13 @@ const (
 )
 
 func main() {
-	logFile        := flag.String("log", "", "Log file path (empty for stderr)")
-	pingTimeout    := flag.Duration("ping-timeout", 0, "Shut down if no ping received within this duration (0 = disabled)")
-	workspaceRoot  := flag.String("workspace", "/workspace", "Workspace root directory")
-	timeout        := flag.Int("timeout", 60, "Default command timeout in seconds")
-	maxOutput      := flag.Int("max-output", 51200, "Max combined stdout+stderr bytes per command")
+	f             := mcpserver.RegisterCommonFlags()
+	workspaceRoot := flag.String("workspace", "/workspace", "Workspace root directory")
+	timeout       := flag.Int("timeout", 60, "Default command timeout in seconds")
+	maxOutput     := flag.Int("max-output", 51200, "Max combined stdout+stderr bytes per command")
 	flag.Parse()
 
-	mcpserver.SetupLogging(*logFile)
+	mcpserver.SetupLogging(*f.LogFile)
 	log.Printf("Starting %s v%s (workspace=%s, timeout=%ds, max-output=%d)",
 		serverName, serverVersion, *workspaceRoot, *timeout, *maxOutput)
 
@@ -33,7 +31,5 @@ func main() {
 		shellserver.WithDefaultTimeout(*timeout),
 		shellserver.WithMaxOutputBytes(*maxOutput),
 	)
-	if err := mcpserver.RunServer(context.Background(), srv, *pingTimeout); err != nil {
-		log.Fatalf("Server error: %v", err)
-	}
+	mcpserver.Serve(srv, f)
 }

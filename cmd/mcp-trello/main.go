@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"log"
 	"os"
@@ -17,14 +16,13 @@ const (
 )
 
 func main() {
+	f             := mcpserver.RegisterCommonFlags()
 	apiKey        := flag.String("api-key", "", "Trello API key (or set TRELLO_API_KEY env var)")
 	token         := flag.String("token", "", "Trello API token (or set TRELLO_TOKEN env var)")
 	allowedBoards := flag.String("allowed-boards", "", "Comma-separated list of board IDs to allow (empty = allow all)")
-	logFile       := flag.String("log", "", "Log file path (empty for stderr)")
-	pingTimeout   := flag.Duration("ping-timeout", 0, "Shut down if no ping received within this duration (0 = disabled)")
 	flag.Parse()
 
-	mcpserver.SetupLogging(*logFile)
+	mcpserver.SetupLogging(*f.LogFile)
 	log.Printf("Starting %s v%s", serverName, serverVersion)
 
 	if *apiKey == "" {
@@ -47,8 +45,5 @@ func main() {
 		log.Printf("Board whitelist enabled: %v", cfg.AllowedBoards)
 	}
 
-	srv := trello.NewServer(serverName, serverVersion, cfg)
-	if err := mcpserver.RunServer(context.Background(), srv, *pingTimeout); err != nil {
-		log.Fatalf("Server error: %v", err)
-	}
+	mcpserver.Serve(trello.NewServer(serverName, serverVersion, cfg), f)
 }

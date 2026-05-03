@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"log"
 	"time"
@@ -16,14 +15,13 @@ const (
 )
 
 func main() {
+	f            := mcpserver.RegisterCommonFlags()
 	baseURL      := flag.String("base-url", "", "Netbox base URL, e.g. https://netbox.example.com (required)")
 	token        := flag.String("token", "", "Netbox API token (required)")
 	timeoutSecs  := flag.Int("timeout", 30, "HTTP timeout seconds")
-	logFile      := flag.String("log", "", "Log file path (default: stderr)")
-	pingTimeoutS := flag.Int("ping-timeout", 0, "Ping watchdog seconds, 0=disabled")
 	flag.Parse()
 
-	mcpserver.SetupLogging(*logFile)
+	mcpserver.SetupLogging(*f.LogFile)
 	if *baseURL == "" {
 		log.Fatal("-base-url is required")
 	}
@@ -42,7 +40,5 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create Netbox server: %v", err)
 	}
-	if err := mcpserver.RunServer(context.Background(), srv, time.Duration(*pingTimeoutS)*time.Second); err != nil {
-		log.Fatalf("Server error: %v", err)
-	}
+	mcpserver.Serve(srv, f)
 }
