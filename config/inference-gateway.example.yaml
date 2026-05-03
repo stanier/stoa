@@ -1,4 +1,4 @@
-# llm-proxy configuration
+# inference-gateway configuration
 #
 # Upstream API keys are never stored here in plaintext.
 # Each upstream references an environment variable via api_key_env.
