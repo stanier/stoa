@@ -39,11 +39,12 @@ func main() {
 		log.Fatalf("proxy init: %v", err)
 	}
 
-	if hooks := inferencegateway.WebhookHooks(cfg.Gateway.Webhook); len(hooks.PreRequest) > 0 || len(hooks.ResponseTransform) > 0 {
+	if hooks := inferencegateway.WebhookHooks(cfg.Gateway.Webhook); len(hooks.PreRequest) > 0 || len(hooks.ResponseTransform) > 0 || hooks.StreamingTransform != nil {
 		srv.WithHooks(hooks)
-		log.Printf("webhook hooks registered (pre-request: %v, response-transform: %v)",
+		log.Printf("webhook hooks registered (pre-request: %v, response-transform: %v, streaming-transform: %v)",
 			cfg.Gateway.Webhook.PreRequestURL != "",
-			cfg.Gateway.Webhook.ResponseTransformURL != "")
+			cfg.Gateway.Webhook.ResponseTransformURL != "",
+			cfg.Gateway.Webhook.StreamingTransformURL != "")
 	}
 
 	addr := cfg.Listen

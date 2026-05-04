@@ -1,10 +1,11 @@
 // pii-filter is a stateful webhook sidecar for the inference-gateway.
 //
-// It implements two endpoints that the inference-gateway calls via its
+// It implements three endpoints that the inference-gateway calls via its
 // WebhookHooks mechanism:
 //
 //	POST /pre-request        — anonymizes PII in inbound messages using Presidio
-//	POST /response-transform — de-anonymizes tokens in the LLM response
+//	POST /response-transform — de-anonymizes tokens in the LLM response (non-streaming)
+//	POST /stream             — per-chunk de-anonymization over a persistent HTTP/2 stream
 //
 // Per-request state (token→original mapping) is stored in memory, keyed by
 // the request_id provided by the inference-gateway. Entries are evicted after
@@ -22,6 +23,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -32,6 +34,8 @@ import (
 	"time"
 
 	"github.com/stanier/stoa/internal/presidio"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 func main() {
@@ -75,13 +79,15 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /pre-request", s.handlePreRequest)
 	mux.HandleFunc("POST /response-transform", s.handleResponseTransform)
+	mux.HandleFunc("POST /stream", s.handleStream)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
+	h2s := &http2.Server{}
 	log.Printf("pii-filter listening on %s (presidio: %s)", listen, presidioURL)
-	if err := http.ListenAndServe(listen, mux); err != nil {
+	if err := http.ListenAndServe(listen, h2c.NewHandler(mux, h2s)); err != nil {
 		log.Fatalf("server: %v", err)
 	}
 }
@@ -203,6 +209,123 @@ func (s *server) handleResponseTransform(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(webhookTransformResponse{Content: content})
 }
+
+// ─── streaming sidecar protocol ───────────────────────────────────────────
+//
+// Mirrors inferencegateway.SidecarInFrame / SidecarOutFrame.
+
+type sidecarInFrame struct {
+	Type      string `json:"type"` // "chunk" or "done"
+	RequestID string `json:"request_id"`
+	Content   string `json:"content,omitempty"`
+	Thinking  string `json:"thinking,omitempty"`
+}
+
+type sidecarOutFrame struct {
+	Type     string `json:"type"` // "ack", "done", or "error"
+	Content  string `json:"content,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// handleStream implements POST /stream using the NDJSON sidecar protocol.
+// The gateway opens one persistent HTTP/2 POST per LLM request. We read
+// SidecarInFrames from the request body and write SidecarOutFrames to the
+// response body, maintaining a 1-in/1-out cadence.
+//
+// We buffer content that ends with an unclosed PII token (e.g. «PERSO before
+// N_0» arrives in the next chunk) and flush the buffer on the "done" frame.
+func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	enc := json.NewEncoder(w)
+	scanner := bufio.NewScanner(r.Body)
+	scanner.Buffer(make([]byte, 64*1024), 64*1024)
+
+	var requestID string
+	var partial string // suffix that starts an unclosed token
+
+	send := func(f sidecarOutFrame) {
+		enc.Encode(f) //nolint:errcheck
+		flusher.Flush()
+	}
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var in sidecarInFrame
+		if err := json.Unmarshal(line, &in); err != nil {
+			send(sidecarOutFrame{Type: "error", Error: "decode: " + err.Error()})
+			return
+		}
+		if in.RequestID != "" {
+			requestID = in.RequestID
+		}
+
+		if in.Type == "done" {
+			// Flush any buffered partial token — stream is over so it must be literal.
+			remaining := partial
+			partial = ""
+			s.mu.Lock()
+			entry, ok := s.store[requestID]
+			if ok {
+				delete(s.store, requestID)
+			}
+			s.mu.Unlock()
+			if ok && len(entry.reverseMap) > 0 {
+				remaining = presidio.Deanonymize(remaining, entry.reverseMap)
+			}
+			send(sidecarOutFrame{Type: "done", Content: remaining})
+			return
+		}
+
+		// "chunk": accumulate with any carry-over from the previous chunk.
+		combined := partial + in.Content
+		safe, newPartial := splitAtPartialToken(combined)
+		partial = newPartial
+
+		s.mu.Lock()
+		entry, ok := s.store[requestID]
+		s.mu.Unlock()
+		if ok && len(entry.reverseMap) > 0 {
+			safe = presidio.Deanonymize(safe, entry.reverseMap)
+		}
+
+		// Thinking content is not anonymized; pass through unchanged.
+		send(sidecarOutFrame{Type: "ack", Content: safe, Thinking: in.Thinking})
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("pii-filter /stream scanner error (req %s): %v", requestID, err)
+	}
+}
+
+// splitAtPartialToken returns the safe prefix and the held-back suffix.
+// We hold back everything from the last unclosed «, because a PII token like
+// «PERSON_0» might be split across two chunks at the « boundary or mid-name.
+func splitAtPartialToken(s string) (safe, partial string) {
+	idx := strings.LastIndex(s, "«")
+	if idx == -1 {
+		return s, ""
+	}
+	// If the « is closed before the end of s, the whole string is safe.
+	if strings.Contains(s[idx:], "»") {
+		return s, ""
+	}
+	return s[:idx], s[idx:]
+}
+
+// ─── eviction ──────────────────────────────────────────────────────────────
 
 // evictLoop removes store entries past their TTL every minute.
 func (s *server) evictLoop() {

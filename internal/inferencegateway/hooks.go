@@ -59,11 +59,30 @@ type ResponseTransformHook func(ctx context.Context, resp *HookResponse) error
 // For streaming responses it fires after the stream is drained.
 type PostResponseHook func(ctx context.Context, resp *HookResponse)
 
+// StreamingTransformer transforms individual chunks for one LLM streaming
+// request. Transform is called once per upstream chunk (including the final
+// Done chunk); it returns the chunk to forward to the client (nil means emit
+// nothing for that chunk). Close tears down the sidecar connection after the
+// Done frame exchange completes.
+//
+// Implementations must not be called concurrently — the server calls Transform
+// sequentially in chunk-arrival order.
+type StreamingTransformer interface {
+	Transform(ctx context.Context, chunk *llm.StreamChunk) (*llm.StreamChunk, error)
+	Close()
+}
+
+// StreamingTransformFactory opens a StreamingTransformer for one LLM request.
+// The connection to the sidecar is established lazily on the first Transform
+// call; errors surface there rather than here.
+type StreamingTransformFactory func(ctx context.Context, requestID, model string) StreamingTransformer
+
 // Hooks holds optional hook slices for the proxy server.
 type Hooks struct {
-	PreRequest        []PreRequestHook
-	ResponseTransform []ResponseTransformHook
-	PostResponse      []PostResponseHook
+	PreRequest         []PreRequestHook
+	ResponseTransform  []ResponseTransformHook
+	PostResponse       []PostResponseHook
+	StreamingTransform StreamingTransformFactory
 }
 
 // WithHooks attaches a Hooks bundle to the server. Must be called before Handler().

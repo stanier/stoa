@@ -10,7 +10,7 @@ import (
 )
 
 // WebhookConfig configures the optional transform webhook pair.
-// Both fields are optional; omit either to skip that phase.
+// All fields are optional; omit any to skip that phase.
 type WebhookConfig struct {
 	// PreRequestURL is called after request parsing, before the upstream LLM
 	// call. The gateway POSTs a WebhookPreRequest body and expects a
@@ -22,9 +22,29 @@ type WebhookConfig struct {
 	// before it is written to the client. The gateway POSTs a
 	// WebhookTransformRequest body and expects a WebhookTransformResponse back.
 	// The content field in the response replaces the LLM's content.
+	//
+	// Not used when StreamingTransformURL is set; the two are mutually
+	// exclusive (StreamingTransformURL takes priority for streaming requests).
 	ResponseTransformURL string `yaml:"response_transform_url"`
 
-	// Timeout for each webhook call (default 10s).
+	// StreamingTransformURL enables per-chunk sidecar transforms over a
+	// persistent HTTP/2 connection. For each streaming LLM request the gateway
+	// opens one POST to this URL, sends NDJSON SidecarInFrames as chunks
+	// arrive, and forwards the NDJSON SidecarOutFrames it receives back in
+	// real time. See streaming_sidecar.go for the frame schema.
+	//
+	// When set, ResponseTransformURL is ignored for streaming requests (but
+	// still applied to non-streaming requests).
+	StreamingTransformURL string `yaml:"streaming_transform_url"`
+
+	// StreamingTLS controls whether the sidecar connection uses TLS.
+	// Defaults to false (plaintext HTTP/2 / h2c), which is appropriate for
+	// co-located sidecars. Set to true when the sidecar is remote.
+	StreamingTLS bool `yaml:"streaming_tls"`
+
+	// Timeout for each non-streaming webhook call (default 10s).
+	// Not applied to streaming connections, which are bounded by the LLM
+	// response duration.
 	Timeout time.Duration `yaml:"timeout"`
 }
 
@@ -71,6 +91,10 @@ func WebhookHooks(cfg WebhookConfig) Hooks {
 	client := &http.Client{Timeout: timeout}
 
 	var h Hooks
+
+	if cfg.StreamingTransformURL != "" {
+		h.StreamingTransform = WebhookStreamingFactory(cfg)
+	}
 
 	if cfg.PreRequestURL != "" {
 		url := cfg.PreRequestURL
