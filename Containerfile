@@ -121,6 +121,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/apikeyd
 FROM builder AS build-inference-gateway
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/inference-gateway ./cmd/inference-gateway
 
+FROM builder AS build-pii-filter
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/pii-filter ./cmd/pii-filter
+
 # =============================================================================
 # Stage 3: Runtime images
 # =============================================================================
@@ -395,3 +398,11 @@ COPY --from=build-inference-gateway /app/inference-gateway /app/inference-gatewa
 WORKDIR /app
 EXPOSE 8080
 ENTRYPOINT ["/app/inference-gateway"]
+
+# pii-filter — Presidio webhook sidecar for inference-gateway
+FROM alpine:latest AS pii-filter
+RUN apk add --no-cache ca-certificates
+COPY --from=build-pii-filter /app/pii-filter /app/pii-filter
+WORKDIR /app
+EXPOSE 3100
+ENTRYPOINT ["/app/pii-filter"]

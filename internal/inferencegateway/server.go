@@ -39,6 +39,7 @@ type GatewayConfig struct {
 	// primary upstream returns a retryable error.
 	FallbackChain []string               `yaml:"fallback_chain"`
 	RateLimit     GatewayRateLimitConfig `yaml:"rate_limit"`
+	Webhook       WebhookConfig          `yaml:"webhook"`
 }
 
 // Config is the top-level proxy configuration.
@@ -341,15 +342,17 @@ func (s *Server) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 	}
 	tools := ParseOpenAITools(req.Tools)
 
-	if err := s.runPreRequest(r.Context(), &HookRequest{
+	ctx, err := s.runPreRequest(r.Context(), &HookRequest{
 		RequestID: requestIDFromContext(r.Context()),
 		Model:     req.Model,
 		Messages:  messages,
 		Tools:     tools,
-	}); err != nil {
+	})
+	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "pre-request hook: "+err.Error())
 		return
 	}
+	r = r.WithContext(ctx)
 
 	upstream := s.router.Resolve(req.Model)
 	id := makeID("chatcmpl")
@@ -376,6 +379,86 @@ func (s *Server) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Stream {
+		if len(s.hooks.ResponseTransform) > 0 {
+			// Buffer full stream so transforms can rewrite content before the client
+			// sees anything. n > 1 is not supported here; one completion is returned.
+			ch, headerSink, err := s.resolveAndStream(req.Model, func(up *Upstream) (<-chan llm.StreamChunk, *llm.UpstreamHeaders, error) {
+				return up.Stream(r.Context(), messages, tools, req.Model, req.MaxTokens, req.Temperature, req.TopP, req.ToolChoice, nil, nil, "", req.ResponseFormat, extras)
+			})
+			if err != nil {
+				writeOpenAIError(w, http.StatusBadGateway, "upstream error: "+err.Error())
+				return
+			}
+			content, toolCalls, inputTokens, outputTokens, _, streamErr := drainChannel(ch)
+			if streamErr != nil {
+				writeOpenAIError(w, http.StatusBadGateway, "upstream error: "+streamErr.Error())
+				return
+			}
+			hookResp := &HookResponse{
+				RequestID:    requestIDFromContext(r.Context()),
+				Model:        req.Model,
+				Content:      content,
+				ToolCalls:    toolCalls,
+				InputTokens:  inputTokens,
+				OutputTokens: outputTokens,
+			}
+			if err := s.runResponseTransform(r.Context(), hookResp); err != nil {
+				writeOpenAIError(w, http.StatusInternalServerError, "response transform: "+err.Error())
+				return
+			}
+			if upstreamHeaders := headerSink.Wait(r.Context()); upstreamHeaders != nil {
+				for _, h := range rateLimitHeaders {
+					if v := upstreamHeaders.Get(h); v != "" {
+						w.Header().Set(h, v)
+					}
+				}
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+			w.Header().Set("X-Accel-Buffering", "no")
+			writeSSE(w, "data: ", &OpenAIStreamChunk{
+				ID: id, Object: "chat.completion.chunk", Created: time.Now().Unix(), Model: req.Model,
+				Choices: []OpenAIStreamChoice{{Index: 0, Delta: OpenAIDelta{Role: "assistant"}}},
+			})
+			if data := MakeOpenAIStreamChunk(llm.StreamChunk{Content: hookResp.Content}, id, req.Model, 0, 0, false); data != nil {
+				_, _ = w.Write(data)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			}
+			for i := range hookResp.ToolCalls {
+				tc := hookResp.ToolCalls[i]
+				if data := MakeOpenAIStreamChunk(llm.StreamChunk{ToolUse: &tc}, id, req.Model, 0, i, false); data != nil {
+					_, _ = w.Write(data)
+					if f, ok := w.(http.Flusher); ok {
+						f.Flush()
+					}
+				}
+			}
+			fr := "stop"
+			if len(hookResp.ToolCalls) > 0 {
+				fr = "tool_calls"
+			}
+			doneChunk := &OpenAIStreamChunk{
+				ID: id, Object: "chat.completion.chunk", Created: time.Now().Unix(), Model: req.Model,
+				Choices: []OpenAIStreamChoice{{Index: 0, Delta: OpenAIDelta{}, FinishReason: &fr}},
+			}
+			if includeUsage {
+				doneChunk.Usage = &OpenAIUsage{
+					PromptTokens:     hookResp.InputTokens,
+					CompletionTokens: hookResp.OutputTokens,
+					TotalTokens:      hookResp.InputTokens + hookResp.OutputTokens,
+				}
+			}
+			writeSSE(w, "data: ", doneChunk)
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			s.runPostResponse(r.Context(), hookResp)
+			return
+		}
 		// Fan out n concurrent upstream streams, merging chunks tagged with their choice index.
 		// We collect the header sink from choice 0 to forward rate-limit headers.
 		type taggedChunk struct {
@@ -517,6 +600,23 @@ func (s *Server) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 	}
 	wg.Wait()
 
+	if len(s.hooks.ResponseTransform) > 0 && len(results) > 0 && results[0].err == nil {
+		hookResp := &HookResponse{
+			RequestID:    requestIDFromContext(r.Context()),
+			Model:        req.Model,
+			Content:      results[0].content,
+			ToolCalls:    results[0].toolCalls,
+			InputTokens:  results[0].inputTokens,
+			OutputTokens: results[0].outputTokens,
+		}
+		if err := s.runResponseTransform(r.Context(), hookResp); err != nil {
+			writeOpenAIError(w, http.StatusInternalServerError, "response transform: "+err.Error())
+			return
+		}
+		results[0].content = hookResp.Content
+		results[0].toolCalls = hookResp.ToolCalls
+	}
+
 	// Use token counts from choice 0; report the first error encountered.
 	var inputTokens, outputTokens int
 	choices := make([]OpenAIChoice, 0, n)
@@ -615,15 +715,17 @@ func (s *Server) handleAnthropic(w http.ResponseWriter, r *http.Request) {
 	}
 	tools := ParseAnthropicTools(req.Tools)
 
-	if err := s.runPreRequest(r.Context(), &HookRequest{
+	ctx, err := s.runPreRequest(r.Context(), &HookRequest{
 		RequestID: requestIDFromContext(r.Context()),
 		Model:     req.Model,
 		Messages:  messages,
 		Tools:     tools,
-	}); err != nil {
+	})
+	if err != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "pre-request hook: "+err.Error())
 		return
 	}
+	r = r.WithContext(ctx)
 
 	maxTokens := req.MaxTokens
 	upstream := s.router.Resolve(req.Model)
@@ -654,6 +756,108 @@ func (s *Server) handleAnthropic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Stream {
+		if len(s.hooks.ResponseTransform) > 0 {
+			ch, headerSink, err := s.resolveAndStream(req.Model, func(up *Upstream) (<-chan llm.StreamChunk, *llm.UpstreamHeaders, error) {
+				return up.Stream(r.Context(), messages, tools, req.Model, &maxTokens, req.Temperature, req.TopP, req.ToolChoice, thinkingEnabled, thinkingBudget, anthropicBeta, nil, anthropicExtras)
+			})
+			if err != nil {
+				writeAnthropicError(w, http.StatusBadGateway, "upstream error: "+err.Error())
+				return
+			}
+			content, toolCalls, inputTokens, outputTokens, _, streamErr := drainChannel(ch)
+			if streamErr != nil {
+				writeAnthropicError(w, http.StatusBadGateway, "upstream error: "+streamErr.Error())
+				return
+			}
+			hookResp := &HookResponse{
+				RequestID:    requestIDFromContext(r.Context()),
+				Model:        req.Model,
+				Content:      content,
+				ToolCalls:    toolCalls,
+				InputTokens:  inputTokens,
+				OutputTokens: outputTokens,
+			}
+			if err := s.runResponseTransform(r.Context(), hookResp); err != nil {
+				writeAnthropicError(w, http.StatusInternalServerError, "response transform: "+err.Error())
+				return
+			}
+			if upstreamHeaders := headerSink.Wait(r.Context()); upstreamHeaders != nil {
+				for _, h := range rateLimitHeaders {
+					if v := upstreamHeaders.Get(h); v != "" {
+						w.Header().Set(h, v)
+					}
+				}
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+			w.Header().Set("X-Accel-Buffering", "no")
+			flush := func(evs [][]byte) {
+				for _, ev := range evs {
+					_, _ = w.Write(ev)
+				}
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			}
+			flush(MakeAnthropicStartEvents(id, req.Model))
+			blockIdx := 0
+			if hookResp.Content != "" {
+				idx := blockIdx
+				blockIdx++
+				flush([][]byte{
+					anthropicSSE("content_block_start", AnthropicStreamEvent{
+						Type:         "content_block_start",
+						Index:        &idx,
+						ContentBlock: &AnthropicStreamBlock{Type: "text", Text: ""},
+					}),
+					anthropicSSE("content_block_delta", AnthropicStreamEvent{
+						Type:  "content_block_delta",
+						Index: &idx,
+						Delta: &AnthropicStreamDelta{Type: "text_delta", Text: hookResp.Content},
+					}),
+					anthropicSSE("content_block_stop", AnthropicStreamEvent{
+						Type:  "content_block_stop",
+						Index: &idx,
+					}),
+				})
+			}
+			for i := range hookResp.ToolCalls {
+				tc := hookResp.ToolCalls[i]
+				idx := blockIdx
+				blockIdx++
+				flush([][]byte{
+					anthropicSSE("content_block_start", AnthropicStreamEvent{
+						Type:         "content_block_start",
+						Index:        &idx,
+						ContentBlock: &AnthropicStreamBlock{Type: "tool_use", ID: tc.ID, Name: tc.Name},
+					}),
+					anthropicSSE("content_block_delta", AnthropicStreamEvent{
+						Type:  "content_block_delta",
+						Index: &idx,
+						Delta: &AnthropicStreamDelta{Type: "input_json_delta", PartialJSON: string(tc.Parameters)},
+					}),
+					anthropicSSE("content_block_stop", AnthropicStreamEvent{
+						Type:  "content_block_stop",
+						Index: &idx,
+					}),
+				})
+			}
+			stopReason := "end_turn"
+			if len(hookResp.ToolCalls) > 0 {
+				stopReason = "tool_use"
+			}
+			flush([][]byte{
+				anthropicSSE("message_delta", AnthropicStreamEvent{
+					Type:  "message_delta",
+					Delta: &AnthropicStreamDelta{Type: "message_delta", StopReason: stopReason},
+					Usage: &AnthropicUsage{InputTokens: hookResp.InputTokens, OutputTokens: hookResp.OutputTokens},
+				}),
+				anthropicSSE("message_stop", AnthropicStreamEvent{Type: "message_stop"}),
+			})
+			s.runPostResponse(r.Context(), hookResp)
+			return
+		}
 		ch, headerSink, err := s.resolveAndStream(req.Model, func(up *Upstream) (<-chan llm.StreamChunk, *llm.UpstreamHeaders, error) {
 			return up.Stream(r.Context(), messages, tools, req.Model, &maxTokens, req.Temperature, req.TopP, req.ToolChoice, thinkingEnabled, thinkingBudget, anthropicBeta, nil, anthropicExtras)
 		})
@@ -867,6 +1071,22 @@ func (s *Server) handleAnthropic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(s.hooks.ResponseTransform) > 0 {
+		hookResp := &HookResponse{
+			RequestID:    requestIDFromContext(r.Context()),
+			Model:        req.Model,
+			Content:      content,
+			ToolCalls:    toolCalls,
+			InputTokens:  inputTokens,
+			OutputTokens: outputTokens,
+		}
+		if err := s.runResponseTransform(r.Context(), hookResp); err != nil {
+			writeAnthropicError(w, http.StatusInternalServerError, "response transform: "+err.Error())
+			return
+		}
+		content = hookResp.Content
+		toolCalls = hookResp.ToolCalls
+	}
 	resp := MakeAnthropicResponse(content, toolCalls, id, req.Model, inputTokens, outputTokens, stopSequence)
 	writeJSON(w, http.StatusOK, resp)
 	s.runPostResponse(r.Context(), &HookResponse{
@@ -922,15 +1142,17 @@ func (s *Server) handleGemini(w http.ResponseWriter, r *http.Request) {
 	}
 	tools := ParseGeminiTools(req.Tools)
 
-	if err := s.runPreRequest(r.Context(), &HookRequest{
+	ctx, err := s.runPreRequest(r.Context(), &HookRequest{
 		RequestID: requestIDFromContext(r.Context()),
 		Model:     model,
 		Messages:  messages,
 		Tools:     tools,
-	}); err != nil {
+	})
+	if err != nil {
 		writeGeminiError(w, http.StatusBadRequest, "pre-request hook: "+err.Error())
 		return
 	}
+	r = r.WithContext(ctx)
 
 	var maxTokens *int
 	var temperature, topP *float64
@@ -959,6 +1181,69 @@ func (s *Server) handleGemini(w http.ResponseWriter, r *http.Request) {
 	upstream := s.router.Resolve(model)
 
 	if streaming {
+		if len(s.hooks.ResponseTransform) > 0 {
+			ch, headerSink, err := s.resolveAndStream(model, func(up *Upstream) (<-chan llm.StreamChunk, *llm.UpstreamHeaders, error) {
+				return up.Stream(r.Context(), messages, tools, model, maxTokens, temperature, topP, nil, nil, nil, "", nil, nil)
+			})
+			if err != nil {
+				writeGeminiError(w, http.StatusBadGateway, "upstream error: "+err.Error())
+				return
+			}
+			content, toolCalls, inputTokens, outputTokens, _, streamErr := drainChannel(ch)
+			if streamErr != nil {
+				writeGeminiError(w, http.StatusBadGateway, "upstream error: "+streamErr.Error())
+				return
+			}
+			hookResp := &HookResponse{
+				RequestID:    requestIDFromContext(r.Context()),
+				Model:        model,
+				Content:      content,
+				ToolCalls:    toolCalls,
+				InputTokens:  inputTokens,
+				OutputTokens: outputTokens,
+			}
+			if err := s.runResponseTransform(r.Context(), hookResp); err != nil {
+				writeGeminiError(w, http.StatusInternalServerError, "response transform: "+err.Error())
+				return
+			}
+			if upstreamHeaders := headerSink.Wait(r.Context()); upstreamHeaders != nil {
+				for _, h := range rateLimitHeaders {
+					if v := upstreamHeaders.Get(h); v != "" {
+						w.Header().Set(h, v)
+					}
+				}
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+			w.Header().Set("X-Accel-Buffering", "no")
+			inTok := hookResp.InputTokens
+			if hookResp.Content != "" {
+				if data := MakeGeminiStreamChunk(llm.StreamChunk{Content: hookResp.Content}, model, &inTok); data != nil {
+					_, _ = w.Write(data)
+					if f, ok := w.(http.Flusher); ok {
+						f.Flush()
+					}
+				}
+			}
+			for i := range hookResp.ToolCalls {
+				tc := hookResp.ToolCalls[i]
+				if data := MakeGeminiStreamChunk(llm.StreamChunk{ToolUse: &tc}, model, &inTok); data != nil {
+					_, _ = w.Write(data)
+					if f, ok := w.(http.Flusher); ok {
+						f.Flush()
+					}
+				}
+			}
+			if data := MakeGeminiStreamChunk(llm.StreamChunk{Done: true, InputTokens: hookResp.InputTokens, OutputTokens: hookResp.OutputTokens}, model, &inTok); data != nil {
+				_, _ = w.Write(data)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			}
+			s.runPostResponse(r.Context(), hookResp)
+			return
+		}
 		ch, headerSink, err := s.resolveAndStream(model, func(up *Upstream) (<-chan llm.StreamChunk, *llm.UpstreamHeaders, error) {
 			return up.Stream(r.Context(), messages, tools, model, maxTokens, temperature, topP, nil, nil, nil, "", nil, nil)
 		})
@@ -1036,6 +1321,22 @@ func (s *Server) handleGemini(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(s.hooks.ResponseTransform) > 0 {
+		hookResp := &HookResponse{
+			RequestID:    requestIDFromContext(r.Context()),
+			Model:        model,
+			Content:      content,
+			ToolCalls:    toolCalls,
+			InputTokens:  inputTokens,
+			OutputTokens: outputTokens,
+		}
+		if err := s.runResponseTransform(r.Context(), hookResp); err != nil {
+			writeGeminiError(w, http.StatusInternalServerError, "response transform: "+err.Error())
+			return
+		}
+		content = hookResp.Content
+		toolCalls = hookResp.ToolCalls
+	}
 	resp := MakeGeminiResponse(content, toolCalls, model, inputTokens, outputTokens)
 	writeJSON(w, http.StatusOK, resp)
 	s.runPostResponse(r.Context(), &HookResponse{
@@ -1191,6 +1492,33 @@ func drainStream(ctx context.Context, upstream *Upstream, messages []chat.Messag
 		content = thinkingSb.String()
 	}
 	return content, toolCalls, inputTokens, outputTokens, stopSequence, nil
+}
+
+// drainChannel collects all chunks from an already-started stream channel.
+// It mirrors drainStream but takes a channel directly, for use after
+// resolveAndStream when buffering is required (e.g. response transforms).
+func drainChannel(ch <-chan llm.StreamChunk) (content string, toolCalls []llm.ToolUse, inputTokens, outputTokens int, stopSequence string, err error) {
+	var sb, thinkingSb strings.Builder
+	for chunk := range ch {
+		if chunk.Error != nil {
+			return "", nil, 0, 0, "", chunk.Error
+		}
+		sb.WriteString(chunk.Content)
+		thinkingSb.WriteString(chunk.Thinking)
+		if chunk.ToolUse != nil {
+			toolCalls = append(toolCalls, *chunk.ToolUse)
+		}
+		if chunk.Done {
+			inputTokens = chunk.InputTokens
+			outputTokens = chunk.OutputTokens
+			stopSequence = chunk.StopSequence
+		}
+	}
+	content = sb.String()
+	if content == "" && thinkingSb.Len() > 0 {
+		content = thinkingSb.String()
+	}
+	return
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

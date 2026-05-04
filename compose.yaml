@@ -205,6 +205,68 @@ services:
       retries: 6
 
   # ---------------------------------------------------------------------------
+  # presidio-analyzer — Microsoft Presidio NLP PII detection service
+  # Reachable only by pii-filter (pii-net). No external exposure.
+  # ---------------------------------------------------------------------------
+
+  presidio-analyzer:
+    image: mcr.microsoft.com/presidio-analyzer:latest
+    container_name: stoa-presidio-analyzer
+    mem_limit: 1g
+    memswap_limit: 1g
+    networks:
+      - pii-net
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 6
+      start_period: 2m
+
+  # ---------------------------------------------------------------------------
+  # pii-filter — Presidio webhook sidecar for inference-gateway
+  # Anonymizes inbound messages (pre-request) and de-anonymizes LLM responses
+  # (response-transform) using Presidio. Reachable only via pii-net.
+  # ---------------------------------------------------------------------------
+
+  pii-filter:
+    image: pii-filter:local
+    build:
+      context: .
+      target: pii-filter
+    container_name: stoa-pii-filter
+    mem_limit: 128m
+    memswap_limit: 128m
+    environment:
+      PII_LISTEN: ":3100"
+      PII_PRESIDIO_URL: "http://presidio-analyzer:3000"
+      PII_LANGUAGE: "en"
+      PII_SCORE_THRESHOLD: "0.5"
+      # PII_ENTITIES: "PERSON,EMAIL_ADDRESS,PHONE_NUMBER,CREDIT_CARD,IBAN_CODE,IP_ADDRESS,LOCATION"
+      PII_TTL_SECONDS: "300"
+      PII_SKIP_SYSTEM_MSGS: "false"
+    depends_on:
+      presidio-analyzer:
+        condition: service_started
+    networks:
+      - pii-net
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # ---------------------------------------------------------------------------
   # inference-gateway — bidirectional LLM API proxy (OpenAI / Anthropic / Gemini)
   # Validates inbound API keys via apikeyd; forwards to configured upstreams.
   # ---------------------------------------------------------------------------
@@ -233,8 +295,11 @@ services:
     depends_on:
       apikeyd:
         condition: service_healthy
+      pii-filter:
+        condition: service_healthy
     networks:
       - agent-external
+      - pii-net
     restart: unless-stopped
     cap_drop:
       - ALL
@@ -753,6 +818,13 @@ networks:
   idp-net:
     driver: bridge
     name: idp-net
+    internal: true
+
+  # -- PII filter network (internal — inference-gateway ↔ pii-filter ↔ presidio) --
+
+  pii-net:
+    driver: bridge
+    name: pii-net
     internal: true
 
   # -- External-facing ------------------------------------------------------

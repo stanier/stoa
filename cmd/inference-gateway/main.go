@@ -39,6 +39,13 @@ func main() {
 		log.Fatalf("proxy init: %v", err)
 	}
 
+	if hooks := inferencegateway.WebhookHooks(cfg.Gateway.Webhook); len(hooks.PreRequest) > 0 || len(hooks.ResponseTransform) > 0 {
+		srv.WithHooks(hooks)
+		log.Printf("webhook hooks registered (pre-request: %v, response-transform: %v)",
+			cfg.Gateway.Webhook.PreRequestURL != "",
+			cfg.Gateway.Webhook.ResponseTransformURL != "")
+	}
+
 	addr := cfg.Listen
 	if addr == "" {
 		addr = ":8080"

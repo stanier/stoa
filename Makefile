@@ -13,7 +13,7 @@ DOCKER_REGISTRY ?= ghcr.io/stanier
 IMAGE_TAG       ?= latest
 
 # All binaries — name matches ./cmd/<name> and bin/debug/<name>
-BINARIES    := chat mcp-filesystem mcp-memory dump-context mcp-time mcp-fetch mcp-attachments mcp-diff mcp-web-search mcp-http mcp-graphql mcp-netbox mcp-promql mcp-zulip mcp-shell mcp-trello mcp-acp agentd auth-admin authd local-idp webd zulip-bridge slack-bridge discord-bridge matrix-bridge cli-bridge inference-gateway apikeyd
+BINARIES    := chat mcp-filesystem mcp-memory dump-context mcp-time mcp-fetch mcp-attachments mcp-diff mcp-web-search mcp-http mcp-graphql mcp-netbox mcp-promql mcp-zulip mcp-shell mcp-trello mcp-acp agentd auth-admin authd local-idp webd zulip-bridge slack-bridge discord-bridge matrix-bridge cli-bridge inference-gateway apikeyd pii-filter
 MCP_SERVERS := mcp-filesystem mcp-memory mcp-time mcp-fetch mcp-attachments mcp-diff mcp-web-search mcp-http mcp-graphql mcp-netbox mcp-promql mcp-zulip mcp-shell mcp-trello mcp-acp
 
 .DEFAULT_GOAL := help
@@ -174,7 +174,7 @@ docker-compose-down: ## Stop services with docker-compose
 ##@ Podman — local builds
 
 # Service images (non-MCP) — used by podman-build-all, podman-clean, podman-push-all
-SERVICES := chat agentd auth-admin authd local-idp webd zulip-bridge slack-bridge discord-bridge matrix-bridge inference-gateway apikeyd
+SERVICES := chat agentd auth-admin authd local-idp webd zulip-bridge slack-bridge discord-bridge matrix-bridge inference-gateway apikeyd pii-filter
 
 .PHONY: podman-build-all podman-build-mcp-all
 .PHONY: $(addprefix podman-build-,$(SERVICES))
