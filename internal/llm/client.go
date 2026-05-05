@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/stanier/stoa/internal/chat"
+	"github.com/stanier/stoa/internal/presidio"
 )
 
 // Client is the interface for LLM providers
@@ -47,4 +48,10 @@ type StreamChunk struct {
 	InputTokens  int    // Populated on Done chunk: tokens consumed by the prompt
 	OutputTokens int    // Populated on Done chunk: tokens in the generated response
 	StopSequence string // Populated on Done chunk if a stop sequence triggered completion
+
+	// PII anonymization metadata from the sidecar. Non-nil only when pii-filter is
+	// active. InputAnonymizations is set on the first chunk per request;
+	// OutputAnonymizations lists substitutions made in this specific chunk.
+	InputAnonymizations  []presidio.AnonymizationRecord
+	OutputAnonymizations []presidio.AnonymizationRecord
 }

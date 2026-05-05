@@ -20,6 +20,7 @@ import (
 	"github.com/stanier/stoa/internal/llm"
 	"github.com/stanier/stoa/internal/llm/stats"
 	"github.com/stanier/stoa/internal/logging"
+	"github.com/stanier/stoa/internal/presidio"
 	"github.com/stanier/stoa/internal/ratelimit"
 )
 
@@ -420,6 +421,7 @@ func (s *Server) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 			var streamInputTokens, streamOutputTokens int
 			var streamErr error
 			toolCount := 0
+			var piiInput, piiOutput []presidio.AnonymizationRecord
 
 			for chunk := range ch {
 				if chunk.Error != nil {
@@ -441,6 +443,10 @@ func (s *Server) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 				if transformed == nil {
 					continue
 				}
+				if len(transformed.InputAnonymizations) > 0 && piiInput == nil {
+					piiInput = transformed.InputAnonymizations
+				}
+				piiOutput = append(piiOutput, transformed.OutputAnonymizations...)
 				streamContent.WriteString(transformed.Content)
 				if transformed.ToolUse != nil {
 					streamToolCalls = append(streamToolCalls, *transformed.ToolUse)
@@ -459,6 +465,19 @@ func (s *Server) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 					if f, ok := w.(http.Flusher); ok {
 						f.Flush()
 					}
+				}
+			}
+			// Emit a special frame carrying PII metadata so the client can surface
+			// anonymization highlights. Uses a top-level "pii_metadata" key which the
+			// OpenAI SDK ignores but which clients can detect via chunk.RawJSON().
+			if len(piiInput) > 0 || len(piiOutput) > 0 {
+				type piiMeta struct {
+					Input  []presidio.AnonymizationRecord `json:"input_anonymizations,omitempty"`
+					Output []presidio.AnonymizationRecord `json:"output_anonymizations,omitempty"`
+				}
+				writeSSE(w, "data: ", map[string]interface{}{"pii_metadata": piiMeta{Input: piiInput, Output: piiOutput}})
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
 				}
 			}
 			_, _ = w.Write([]byte("data: [DONE]\n\n"))

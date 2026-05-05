@@ -10,6 +10,7 @@ import (
 	"github.com/stanier/stoa/internal/chat"
 	"github.com/stanier/stoa/internal/llm"
 	"github.com/stanier/stoa/internal/logging"
+	"github.com/stanier/stoa/internal/presidio"
 )
 
 // handleMessage appends the user's content to the session history and runs the
@@ -122,15 +123,25 @@ func runAgenticLoop(
 		}
 
 		var (
-			iterContent  strings.Builder
-			iterThinking strings.Builder
-			toolUse      *llm.ToolUse
+			iterContent        strings.Builder
+			iterThinking       strings.Builder
+			toolUse            *llm.ToolUse
+			inputAnonymizations  []presidio.AnonymizationRecord
+			outputAnonymizations []presidio.AnonymizationRecord
 		)
 
 		for chunk := range responseChan {
 			if chunk.Error != nil {
 				return finalResponse, finalThinkingB.String(), lastInputTokens, totalOutputTokens, fmt.Errorf("stream error: %w", chunk.Error)
 			}
+			// Collect anonymization metadata delivered on the Done chunk.
+			if chunk.Done {
+				if len(chunk.InputAnonymizations) > 0 && inputAnonymizations == nil {
+					inputAnonymizations = chunk.InputAnonymizations
+				}
+				outputAnonymizations = append(outputAnonymizations, chunk.OutputAnonymizations...)
+			}
+
 			if chunk.Content != "" {
 				iterContent.WriteString(chunk.Content)
 				sendEvent(agentproto.Event{
@@ -159,6 +170,17 @@ func runAgenticLoop(
 					_ = s.agentDB.RecordTokens(ctx, sess.userID, sess.id, providerName, "", chunk.InputTokens, chunk.OutputTokens)
 				}
 			}
+		}
+
+		// Emit anonymization event when the sidecar reported any activity.
+		if len(inputAnonymizations) > 0 || len(outputAnonymizations) > 0 {
+			sendEvent(agentproto.Event{
+				Type: agentproto.EventTypeAnonymization,
+				Anonymization: &agentproto.AnonymizationEvent{
+					InputAnonymizations:  inputAnonymizations,
+					OutputAnonymizations: outputAnonymizations,
+				},
+			})
 		}
 		s.runPostLLM(ctx, sess.id, iterContent.String(), iterThinking.String())
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/stanier/stoa/internal/chat"
 	"github.com/stanier/stoa/internal/config"
+	"github.com/stanier/stoa/internal/presidio"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -60,6 +61,26 @@ func extractReasoningContent(rawJSON string) string {
 		return raw.ReasoningContent
 	}
 	return ""
+}
+
+// piiMetadataFromChunk extracts anonymization records from a raw chunk JSON blob.
+// The inference-gateway pii-filter sidecar emits one special SSE frame with a
+// top-level "pii_metadata" key before [DONE]. The OpenAI SDK ignores this field
+// but preserves it in RawJSON(), letting us detect it here.
+func piiMetadataFromChunk(rawJSON string) (input, output []presidio.AnonymizationRecord) {
+	if rawJSON == "" || !strings.Contains(rawJSON, "pii_metadata") {
+		return nil, nil
+	}
+	var raw struct {
+		PIIMetadata struct {
+			Input  []presidio.AnonymizationRecord `json:"input_anonymizations"`
+			Output []presidio.AnonymizationRecord `json:"output_anonymizations"`
+		} `json:"pii_metadata"`
+	}
+	if err := json.Unmarshal([]byte(rawJSON), &raw); err == nil {
+		return raw.PIIMetadata.Input, raw.PIIMetadata.Output
+	}
+	return nil, nil
 }
 
 // OpenAIClient implements the Client interface using the OpenAI API
@@ -548,6 +569,7 @@ func (c *OpenAIClient) StreamMessage(ctx context.Context, messages []chat.Messag
 		toolCalls := make(map[int]*ToolUse)
 
 		var usageInputTokens, usageOutputTokens int
+		var piiInput, piiOutput []presidio.AnonymizationRecord
 
 		for stream.Next() {
 			chunk := stream.Current()
@@ -630,6 +652,14 @@ func (c *OpenAIClient) StreamMessage(ctx context.Context, messages []chat.Messag
 				usageInputTokens = int(chunk.Usage.PromptTokens)
 				usageOutputTokens = int(chunk.Usage.CompletionTokens)
 			}
+
+			// Detect pii_metadata frame emitted by the inference-gateway pii-filter sidecar.
+			if inp, out2 := piiMetadataFromChunk(chunk.RawJSON()); inp != nil || out2 != nil {
+				if inp != nil && piiInput == nil {
+					piiInput = inp
+				}
+				piiOutput = append(piiOutput, out2...)
+			}
 		}
 
 		if err := stream.Err(); err != nil {
@@ -637,11 +667,13 @@ func (c *OpenAIClient) StreamMessage(ctx context.Context, messages []chat.Messag
 			return
 		}
 
-		// Send done signal
+		// Send done signal, including any PII metadata collected from the sidecar.
 		out <- StreamChunk{
-			Done:         true,
-			InputTokens:  usageInputTokens,
-			OutputTokens: usageOutputTokens,
+			Done:                 true,
+			InputTokens:          usageInputTokens,
+			OutputTokens:         usageOutputTokens,
+			InputAnonymizations:  piiInput,
+			OutputAnonymizations: piiOutput,
 		}
 	}()
 

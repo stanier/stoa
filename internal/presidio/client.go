@@ -146,12 +146,62 @@ func Anonymize(text string, entities []RecognizedEntity) (anonymized string, rev
 	return sb.String(), reverseMap
 }
 
+// AnonymizationRecord describes one PII substitution: the opaque token used in
+// the LLM context, the Presidio entity type, and the original value.
+type AnonymizationRecord struct {
+	Token      string `json:"token"`       // e.g. «PERSON_0»
+	EntityType string `json:"entity_type"` // e.g. PERSON
+	Original   string `json:"original"`    // e.g. John Smith
+}
+
+// RecordsFromReverseMap derives AnonymizationRecords from a reverse map.
+// The entity type is parsed from the token format «ENTITY_TYPE_N».
+func RecordsFromReverseMap(reverseMap map[string]string) []AnonymizationRecord {
+	out := make([]AnonymizationRecord, 0, len(reverseMap))
+	for token, original := range reverseMap {
+		out = append(out, AnonymizationRecord{
+			Token:      token,
+			EntityType: entityTypeFromToken(token),
+			Original:   original,
+		})
+	}
+	return out
+}
+
 // Deanonymize replaces all tokens in text with their originals from reverseMap.
 func Deanonymize(text string, reverseMap map[string]string) string {
 	for token, original := range reverseMap {
 		text = strings.ReplaceAll(text, token, original)
 	}
 	return text
+}
+
+// DeanonymizeWithAudit replaces tokens and also returns the records for every
+// substitution that actually occurred in text.
+func DeanonymizeWithAudit(text string, reverseMap map[string]string) (string, []AnonymizationRecord) {
+	var records []AnonymizationRecord
+	for token, original := range reverseMap {
+		if strings.Contains(text, token) {
+			records = append(records, AnonymizationRecord{
+				Token:      token,
+				EntityType: entityTypeFromToken(token),
+				Original:   original,
+			})
+			text = strings.ReplaceAll(text, token, original)
+		}
+	}
+	return text, records
+}
+
+// entityTypeFromToken parses the entity type out of a token like «PERSON_0».
+func entityTypeFromToken(token string) string {
+	inner := strings.TrimPrefix(strings.TrimSuffix(token, "»"), "«")
+	// Find the last underscore that separates the type from the index digit(s).
+	idx := strings.LastIndex(inner, "_")
+	if idx > 0 {
+		return inner[:idx]
+	}
+	return inner
 }
 
 // MergeReverseMaps merges src into dst in place.

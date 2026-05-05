@@ -107,87 +107,87 @@
 
 <style>
   :global(:root) {
-    --bg:           #0a0908;
-    --sidebar:      #131211;
-    --surface:      #1c1a18;
-    --surface-hi:   #242220;
-    --depth:        #070605;
-    --hover:        #2a2825;
-    --border:       #2c2a27;
-    --text:         #e2ddd7;
-    --text2:        #948e87;
-    --text3:        #6b6560;
-    --text4:        #4a4540;
-    --text5:        #302d2a;
-    --accent:       #9a8f82;
-    --accent-light: #c4bab2;
-    --accent-dark:  #7a706a;
+    --bg:           #0e0d0c;
+    --sidebar:      #111110;
+    --surface:      #1c1b19;
+    --surface-hi:   #262421;
+    --depth:        #0a0908;
+    --hover:        #2a2824;
+    --border:       #3a3733;
+    --text:         #ece7e0;
+    --text2:        #b0a89f;
+    --text3:        #857d75;
+    --text4:        #5e5852;
+    --text5:        #3a3632;
+    --accent:       #a89a8a;
+    --accent-light: #d4c8bc;
+    --accent-dark:  #8a7e72;
     --bubble-user:  #3c3835;
     color-scheme: dark;
-    background: #0a0908;
+    background: #0e0d0c;
   }
 
   :global([data-theme="marble"]) {
-    --bg:           #e8e4df;
-    --sidebar:      #f5f3f0;
-    --surface:      #faf8f6;
-    --surface-hi:   #edeae6;
-    --depth:        #ddd9d3;
-    --hover:        #e4e0da;
-    --border:       #ccc8c2;
-    --text:         #1c1a18;
-    --text2:        #5c5750;
-    --text3:        #7a7570;
-    --text4:        #9a9590;
-    --text5:        #b0aba5;
-    --accent:       #4a4238;
-    --accent-light: #7a6e65;
-    --accent-dark:  #2c2520;
+    --bg:           #f4f2ef;
+    --sidebar:      #eceae6;
+    --surface:      #f9f7f5;
+    --surface-hi:   #eae7e3;
+    --depth:        #e0ddd8;
+    --hover:        #e2dfda;
+    --border:       #c4bfb8;
+    --text:         #14110f;
+    --text2:        #3d3832;
+    --text3:        #5e574f;
+    --text4:        #7d756c;
+    --text5:        #a09a92;
+    --accent:       #3a322a;
+    --accent-light: #6a5e54;
+    --accent-dark:  #1c1612;
     --bubble-user:  #3a3330;
     color-scheme: light;
-    background: #e8e4df;
+    background: #f4f2ef;
   }
 
   :global([data-theme="sandstone"]) {
-    --bg:           #100c06;
-    --sidebar:      #1a1208;
-    --surface:      #241a0e;
-    --surface-hi:   #2e2214;
-    --depth:        #0c0804;
-    --hover:        #342818;
-    --border:       #3a2e1c;
-    --text:         #ecddc8;
-    --text2:        #9a8468;
-    --text3:        #6e5a40;
-    --text4:        #4a3c28;
-    --text5:        #302518;
-    --accent:       #c08840;
-    --accent-light: #e0a860;
-    --accent-dark:  #9a6c28;
+    --bg:           #18120a;
+    --sidebar:      #1c160d;
+    --surface:      #251c12;
+    --surface-hi:   #322618;
+    --depth:        #100c06;
+    --hover:        #36291a;
+    --border:       #4a3a24;
+    --text:         #f4e6d0;
+    --text2:        #b89c78;
+    --text3:        #8a7250;
+    --text4:        #5e4a32;
+    --text5:        #3a2e1d;
+    --accent:       #d49858;
+    --accent-light: #ecbc7c;
+    --accent-dark:  #a87838;
     --bubble-user:  #5a3e20;
     color-scheme: dark;
-    background: #100c06;
+    background: #18120a;
   }
 
   :global([data-theme="slate"]) {
-    --bg:           #08090c;
-    --sidebar:      #0e1016;
-    --surface:      #161a22;
-    --surface-hi:   #1e2430;
-    --depth:        #050608;
-    --hover:        #202838;
-    --border:       #222830;
-    --text:         #d8dde4;
-    --text2:        #7a8490;
-    --text3:        #556070;
-    --text4:        #3a4450;
-    --text5:        #252d38;
-    --accent:       #5a7898;
-    --accent-light: #8aaac8;
-    --accent-dark:  #3a5878;
+    --bg:           #0b0d10;
+    --sidebar:      #0e1114;
+    --surface:      #171c25;
+    --surface-hi:   #1f2632;
+    --depth:        #08090c;
+    --hover:        #242c3a;
+    --border:       #2c3440;
+    --text:         #e4e8ee;
+    --text2:        #94a0ae;
+    --text3:        #6a7585;
+    --text4:        #48525e;
+    --text5:        #2c343f;
+    --accent:       #7090b0;
+    --accent-light: #a0bcd8;
+    --accent-dark:  #4a6888;
     --bubble-user:  #1e3a58;
     color-scheme: dark;
-    background: #08090c;
+    background: #0b0d10;
   }
 
   :global(*, *::before, *::after) { box-sizing: border-box; margin: 0; padding: 0; }

@@ -122,8 +122,9 @@ type webhookTransformResponse struct {
 // ─── server ───────────────────────────────────────────────────────────────
 
 type storeEntry struct {
-	reverseMap map[string]string
-	expiresAt  time.Time
+	reverseMap     map[string]string
+	inputRecords   []presidio.AnonymizationRecord // what was anonymized in the input
+	expiresAt      time.Time
 }
 
 type server struct {
@@ -176,8 +177,9 @@ func (s *server) handlePreRequest(w http.ResponseWriter, r *http.Request) {
 	if len(combined) > 0 {
 		s.mu.Lock()
 		s.store[req.RequestID] = storeEntry{
-			reverseMap: combined,
-			expiresAt:  time.Now().Add(s.ttl),
+			reverseMap:   combined,
+			inputRecords: presidio.RecordsFromReverseMap(combined),
+			expiresAt:    time.Now().Add(s.ttl),
 		}
 		s.mu.Unlock()
 	}
@@ -226,6 +228,12 @@ type sidecarOutFrame struct {
 	Content  string `json:"content,omitempty"`
 	Thinking string `json:"thinking,omitempty"`
 	Error    string `json:"error,omitempty"`
+
+	// Anonymization metadata (omitted when empty).
+	// InputAnonymizations is populated on the first ack frame for a request.
+	// OutputAnonymizations lists tokens substituted back in this chunk.
+	InputAnonymizations  []presidio.AnonymizationRecord `json:"input_anonymizations,omitempty"`
+	OutputAnonymizations []presidio.AnonymizationRecord `json:"output_anonymizations,omitempty"`
 }
 
 // handleStream implements POST /stream using the NDJSON sidecar protocol.
@@ -252,6 +260,7 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	var requestID string
 	var partial string // suffix that starts an unclosed token
+	var inputSent bool // true after inputAnonymizations have been emitted once
 
 	send := func(f sidecarOutFrame) {
 		enc.Encode(f) //nolint:errcheck
@@ -283,10 +292,11 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 				delete(s.store, requestID)
 			}
 			s.mu.Unlock()
+			var outputRecords []presidio.AnonymizationRecord
 			if ok && len(entry.reverseMap) > 0 {
-				remaining = presidio.Deanonymize(remaining, entry.reverseMap)
+				remaining, outputRecords = presidio.DeanonymizeWithAudit(remaining, entry.reverseMap)
 			}
-			send(sidecarOutFrame{Type: "done", Content: remaining})
+			send(sidecarOutFrame{Type: "done", Content: remaining, OutputAnonymizations: outputRecords})
 			return
 		}
 
@@ -298,12 +308,20 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		entry, ok := s.store[requestID]
 		s.mu.Unlock()
+
+		var outputRecords []presidio.AnonymizationRecord
 		if ok && len(entry.reverseMap) > 0 {
-			safe = presidio.Deanonymize(safe, entry.reverseMap)
+			safe, outputRecords = presidio.DeanonymizeWithAudit(safe, entry.reverseMap)
 		}
 
+		frame := sidecarOutFrame{Type: "ack", Content: safe, Thinking: in.Thinking, OutputAnonymizations: outputRecords}
+		// Attach input anonymizations once on the first ack for this request.
+		if !inputSent && ok && len(entry.inputRecords) > 0 {
+			frame.InputAnonymizations = entry.inputRecords
+			inputSent = true
+		}
 		// Thinking content is not anonymized; pass through unchanged.
-		send(sidecarOutFrame{Type: "ack", Content: safe, Thinking: in.Thinking})
+		send(frame)
 	}
 	if err := scanner.Err(); err != nil {
 		log.Printf("pii-filter /stream scanner error (req %s): %v", requestID, err)

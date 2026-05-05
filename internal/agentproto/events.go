@@ -2,40 +2,46 @@
 // (TUI, Zulip bridge, etc.).
 package agentproto
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/stanier/stoa/internal/presidio"
+)
 
 // EventType identifies which field in an Event is populated.
 type EventType string
 
 const (
-	EventTypeChunk          EventType = "chunk"
-	EventTypeDone           EventType = "done"
-	EventTypeToolInvoked    EventType = "tool_invoked"
-	EventTypeToolResult     EventType = "tool_result"
-	EventTypePermRequest    EventType = "perm_request"
-	EventTypePermMention    EventType = "perm_mention"
-	EventTypeCompaction     EventType = "compaction"
-	EventTypeError          EventType = "error"
-	EventTypeAgentSpawned   EventType = "agent_spawned"
-	EventTypeAgentCompleted EventType = "agent_completed"
-	EventTypeTitle          EventType = "title"
+	EventTypeChunk              EventType = "chunk"
+	EventTypeDone               EventType = "done"
+	EventTypeToolInvoked        EventType = "tool_invoked"
+	EventTypeToolResult         EventType = "tool_result"
+	EventTypePermRequest        EventType = "perm_request"
+	EventTypePermMention        EventType = "perm_mention"
+	EventTypeCompaction         EventType = "compaction"
+	EventTypeError              EventType = "error"
+	EventTypeAgentSpawned       EventType = "agent_spawned"
+	EventTypeAgentCompleted     EventType = "agent_completed"
+	EventTypeTitle              EventType = "title"
+	EventTypeAnonymization      EventType = "anonymization"
 )
 
 // Event is the server→client message. Exactly one of the payload fields is non-nil.
 type Event struct {
-	Type           EventType            `json:"type"`
-	SessionID      string               `json:"session_id"`
-	Chunk          *ChunkEvent          `json:"chunk,omitempty"`
-	Done           *DoneEvent           `json:"done,omitempty"`
-	ToolInvoked    *ToolInvokedEvent    `json:"tool_invoked,omitempty"`
-	ToolResult     *ToolResultEvent     `json:"tool_result,omitempty"`
-	PermRequest    *PermRequestEvent    `json:"perm_request,omitempty"`
-	PermMention    *PermMentionEvent    `json:"perm_mention,omitempty"`
-	Compaction     *CompactionEvent     `json:"compaction,omitempty"`
-	Error          *ErrorEvent          `json:"error,omitempty"`
-	AgentSpawned   *AgentSpawnedEvent   `json:"agent_spawned,omitempty"`
-	AgentCompleted *AgentCompletedEvent `json:"agent_completed,omitempty"`
-	Title          *TitleEvent          `json:"title,omitempty"`
+	Type            EventType             `json:"type"`
+	SessionID       string                `json:"session_id"`
+	Chunk           *ChunkEvent           `json:"chunk,omitempty"`
+	Done            *DoneEvent            `json:"done,omitempty"`
+	ToolInvoked     *ToolInvokedEvent     `json:"tool_invoked,omitempty"`
+	ToolResult      *ToolResultEvent      `json:"tool_result,omitempty"`
+	PermRequest     *PermRequestEvent     `json:"perm_request,omitempty"`
+	PermMention     *PermMentionEvent     `json:"perm_mention,omitempty"`
+	Compaction      *CompactionEvent      `json:"compaction,omitempty"`
+	Error           *ErrorEvent           `json:"error,omitempty"`
+	AgentSpawned    *AgentSpawnedEvent    `json:"agent_spawned,omitempty"`
+	AgentCompleted  *AgentCompletedEvent  `json:"agent_completed,omitempty"`
+	Title           *TitleEvent           `json:"title,omitempty"`
+	Anonymization   *AnonymizationEvent   `json:"anonymization,omitempty"`
 }
 
 // ChunkEvent carries an incremental piece of the assistant's response during streaming.
@@ -121,4 +127,16 @@ type AgentCompletedEvent struct {
 // TitleEvent notifies the client that a session title has been generated or updated.
 type TitleEvent struct {
 	Title string `json:"title"`
+}
+
+// AnonymizationEvent notifies the client of PII substitutions made by the
+// pii-filter sidecar for a single turn.
+//
+// InputAnonymizations lists what was replaced in the user's message before it
+// was sent to the LLM. OutputAnonymizations lists tokens that were substituted
+// back (de-anonymized) in the assistant's response so far. Both slices may be
+// empty when the sidecar found nothing to anonymize/de-anonymize.
+type AnonymizationEvent struct {
+	InputAnonymizations  []presidio.AnonymizationRecord `json:"input_anonymizations,omitempty"`
+	OutputAnonymizations []presidio.AnonymizationRecord `json:"output_anonymizations,omitempty"`
 }

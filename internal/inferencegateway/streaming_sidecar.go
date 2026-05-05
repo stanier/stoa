@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/stanier/stoa/internal/llm"
+	"github.com/stanier/stoa/internal/presidio"
 	"golang.org/x/net/http2"
 )
 
@@ -58,6 +59,11 @@ type SidecarOutFrame struct {
 
 	// Error message (type == "error" only).
 	Error string `json:"error,omitempty"`
+
+	// PII anonymization metadata from the sidecar. Populated only when
+	// the pii-filter sidecar is active; omitted otherwise.
+	InputAnonymizations  []presidio.AnonymizationRecord `json:"input_anonymizations,omitempty"`
+	OutputAnonymizations []presidio.AnonymizationRecord `json:"output_anonymizations,omitempty"`
 }
 
 // ─── Client ────────────────────────────────────────────────────────────────
@@ -204,12 +210,14 @@ func chunkToSidecarFrame(requestID, model string, chunk *llm.StreamChunk) Sideca
 
 func sidecarFrameToChunk(frame SidecarOutFrame, original *llm.StreamChunk) *llm.StreamChunk {
 	out := &llm.StreamChunk{
-		Content:      frame.Content,
-		Thinking:     frame.Thinking,
-		Done:         original.Done,
-		InputTokens:  original.InputTokens,
-		OutputTokens: original.OutputTokens,
-		StopSequence: original.StopSequence,
+		Content:              frame.Content,
+		Thinking:             frame.Thinking,
+		Done:                 original.Done,
+		InputTokens:          original.InputTokens,
+		OutputTokens:         original.OutputTokens,
+		StopSequence:         original.StopSequence,
+		InputAnonymizations:  frame.InputAnonymizations,
+		OutputAnonymizations: frame.OutputAnonymizations,
 	}
 	if frame.ToolUseID != "" {
 		out.ToolUse = &llm.ToolUse{
@@ -219,7 +227,8 @@ func sidecarFrameToChunk(frame SidecarOutFrame, original *llm.StreamChunk) *llm.
 		}
 	}
 	// If everything is empty, return nil so the caller emits nothing.
-	if out.Content == "" && out.Thinking == "" && out.ToolUse == nil && !out.Done {
+	if out.Content == "" && out.Thinking == "" && out.ToolUse == nil && !out.Done &&
+		len(out.InputAnonymizations) == 0 && len(out.OutputAnonymizations) == 0 {
 		return nil
 	}
 	return out

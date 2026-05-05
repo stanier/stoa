@@ -339,6 +339,20 @@
         if (ev.error?.fatal) { connected = false; onSessionEnd?.() }
         break
       }
+
+      case 'anonymization': {
+        const anonEv = ev.anonymization
+        if (!anonEv) break
+        if (anonEv.input_anonymizations?.length) {
+          const lastUser = messages.findLast(m => m.kind === 'user')
+          if (lastUser) { lastUser.inputAnonymizations = anonEv.input_anonymizations; messages = messages }
+        }
+        if (anonEv.output_anonymizations?.length) {
+          const lastAsst = messages.findLast(m => m.kind === 'assistant')
+          if (lastAsst) { lastAsst.outputAnonymizations = anonEv.output_anonymizations; messages = messages }
+        }
+        break
+      }
     }
   }
 
@@ -433,9 +447,88 @@
       return String(params)
     }
   }
+
+  // ── PII highlighting ─────────────────────────────────────────────────────
+
+  const PII_COLORS = {
+    'person':          'var(--pii-person)',
+    'email-address':   'var(--pii-email)',
+    'phone-number':    'var(--pii-phone)',
+    'credit-card':     'var(--pii-credit)',
+    'ip-address':      'var(--pii-ip)',
+    'location':        'var(--pii-location)',
+    'iban-code':       'var(--pii-credit)',
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  }
+
+  // Wraps occurrences of each record.original in text with a <mark> span.
+  // text must already be safe to embed as HTML (i.e. either HTML-escaped or
+  // it is markdown that will be re-processed by marked).
+  function applyPIIMarks(text, records) {
+    if (!records?.length) return text
+    // Longest originals first so shorter substrings don't prevent longer matches.
+    const sorted = [...records].sort((a, b) => (b.original?.length ?? 0) - (a.original?.length ?? 0))
+    for (const r of sorted) {
+      if (!r.original) continue
+      const entityClass = (r.entity_type ?? 'unknown').toLowerCase().replace(/_/g, '-')
+      const label = r.entity_type ?? 'PII'
+      const re = new RegExp(r.original.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')
+      text = text.replace(re, `<mark class="pii-mark pii-${entityClass}" title="${label}">${r.original}</mark>`)
+    }
+    return text
+  }
+
+  // For user message bubbles: HTML-escape the plain text then apply marks.
+  function highlightPIIText(text, records) {
+    if (!records?.length) return escapeHtml(text)
+    const escapedText = escapeHtml(text)
+    const escapedRecords = records.map(r => ({ ...r, original: escapeHtml(r.original ?? '') }))
+    return applyPIIMarks(escapedText, escapedRecords)
+  }
+
+  // For assistant markdown: inject marks into the raw markdown before rendering.
+  // marked passes raw HTML through, so <mark> tags survive the render.
+  function highlightPIIMarkdown(text, records) {
+    if (!records?.length) return text
+    return applyPIIMarks(text, records)
+  }
+
 </script>
 
 <style>
+  /* PII entity-type color palette */
+  :root {
+    --pii-person:   #f59e0b;
+    --pii-email:    #3b82f6;
+    --pii-phone:    #10b981;
+    --pii-credit:   #ef4444;
+    --pii-ip:       #8b5cf6;
+    --pii-location: #06b6d4;
+    --pii-default:  #f59e0b;
+  }
+
+  :global(.pii-mark) {
+    border-radius: 3px;
+    padding: 0 2px;
+    cursor: help;
+    background: color-mix(in srgb, var(--pii-color, var(--pii-default)) 22%, transparent);
+    outline: 1px solid color-mix(in srgb, var(--pii-color, var(--pii-default)) 55%, transparent);
+    color: inherit;
+    font-style: normal;
+  }
+  :global(.pii-person)        { --pii-color: var(--pii-person); }
+  :global(.pii-email-address) { --pii-color: var(--pii-email); }
+  :global(.pii-phone-number)  { --pii-color: var(--pii-phone); }
+  :global(.pii-credit-card)   { --pii-color: var(--pii-credit); }
+  :global(.pii-iban-code)     { --pii-color: var(--pii-credit); }
+  :global(.pii-ip-address)    { --pii-color: var(--pii-ip); }
+  :global(.pii-location)      { --pii-color: var(--pii-location); }
+
+  .bubble-user :global(.pii-mark) { color: #fff; }
+
   .outer  { display: flex; flex: 1; min-width: 0; overflow: hidden; }
   .layout { display: flex; flex-direction: column; flex: 1; min-width: 0; overflow: hidden; }
 
@@ -781,7 +874,13 @@
                 {/each}
               </div>
             {/if}
-            {#if msg.content}{msg.content}{/if}
+            {#if msg.content}
+              {#if msg.inputAnonymizations?.length}
+                {@html highlightPIIText(msg.content, msg.inputAnonymizations)}
+              {:else}
+                {msg.content}
+              {/if}
+            {/if}
           </div>
         </div>
 
@@ -794,7 +893,7 @@
             </details>
           {/if}
           <div class="bubble-assistant md-content">
-            {@html renderMarkdown(msg.content)}{#if msg.streaming}<span class="cursor"></span>{/if}
+            {@html renderMarkdown(highlightPIIMarkdown(msg.content, msg.outputAnonymizations))}{#if msg.streaming}<span class="cursor"></span>{/if}
           </div>
           {#if !msg.streaming}
             {@const msgKey = i}
