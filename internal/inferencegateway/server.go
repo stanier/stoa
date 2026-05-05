@@ -147,6 +147,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/v1/models", auth(http.HandlerFunc(s.handleModels)))
 	// Metrics — auth-exempt so Prometheus scrapers do not need an API key.
 	mux.HandleFunc("/metrics", s.handleMetrics)
+	// Health — auth-exempt for container health checks.
+	mux.HandleFunc("/healthz", s.handleHealthz)
 	return corsMiddleware(requestIDMiddleware(stripSDKHeaders(mux)))
 }
 
@@ -199,6 +201,13 @@ func wrapStream(src <-chan llm.StreamChunk, start time.Time, provider string, re
 		reg.Get(provider).Record(time.Since(start).Milliseconds(), hasErr)
 	}()
 	return out
+}
+
+// handleHealthz returns 200 OK. Auth-exempt; used by container health checks.
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"ok"}`)) //nolint:errcheck
 }
 
 // handleMetrics serves provider health statistics in JSON or Prometheus text format.
