@@ -79,6 +79,8 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logging.Infof("agentd: created session %s (persona=%q, source=%q, user=%q)", sessionID, req.Persona, req.Source, req.UserID)
+	s.metrics.sessionsCreated.WithLabelValues(req.Source, req.Persona).Inc()
+	s.metrics.activeSessions.WithLabelValues(req.Source).Inc()
 	s.runPostCreate(r.Context(), sessionID, req.UserID, req.Source)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -139,11 +141,17 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, ses
 	}
 
 	s.mu.Lock()
-	_, ok := s.sessions[sessionID]
+	existing, ok := s.sessions[sessionID]
 	if ok {
 		delete(s.sessions, sessionID)
 	}
 	s.mu.Unlock()
+	if ok {
+		existing.mu.Lock()
+		src := existing.source
+		existing.mu.Unlock()
+		s.metrics.activeSessions.WithLabelValues(src).Dec()
+	}
 
 	// Remove from DB even if not in memory (may have been evicted).
 	if s.agentDB != nil {
@@ -315,6 +323,7 @@ func (s *Server) handleCompactSession(w http.ResponseWriter, r *http.Request, se
 
 	logging.Infof("agentd: session %s compacted (%d→%d messages, %d→%d tokens)",
 		sess.id, len(msgsBefore), len(newMessages), tokensBefore, tokensAfter)
+	s.metrics.compactionsTotal.WithLabelValues("manual").Inc()
 
 	s.persistSession(sess)
 
@@ -362,6 +371,7 @@ func (s *Server) maybeAutoCompact(ctx context.Context, sess *Session, currentTok
 
 	logging.Infof("agentd: auto-compacting session %s (%d tokens > threshold %d)",
 		sess.id, tokenCount, s.cfg.Compaction.CompactThreshold)
+	s.metrics.compactionsTotal.WithLabelValues("auto").Inc()
 
 	var strategy compaction.Strategy
 	switch s.cfg.Compaction.Strategy {
@@ -553,8 +563,10 @@ func (w *wsWriter) send(ev agentproto.Event) {
 // A semaphore (agentSem) ensures at most one agentic loop runs per session at a time.
 func (s *Server) serveWebSocket(ws *websocket.Conn, sess *Session, token string) {
 	logging.Infof("agentd: WS connected for session %s", sess.id)
+	s.metrics.activeWSConns.Inc()
 	defer func() {
 		logging.Infof("agentd: WS disconnected for session %s", sess.id)
+		s.metrics.activeWSConns.Dec()
 		ws.Close()
 	}()
 
@@ -1054,38 +1066,3 @@ func (s *Server) handleSessionTools(w http.ResponseWriter, r *http.Request, sess
 	}
 }
 
-// handleMetrics handles GET /metrics.
-// Provider health metrics have moved to inference-gateway (/metrics on port 8080).
-// This endpoint returns cache stats that are still owned by agentd.
-func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	type cacheSnap struct {
-		Hits    int64   `json:"hits"`
-		Misses  int64   `json:"misses"`
-		HitRate float64 `json:"hit_rate"`
-	}
-	var cs *cacheSnap
-	if s.llmCache != nil {
-		st := s.llmCache.Stats()
-		total := st.Hits + st.Misses
-		hitRate := 0.0
-		if total > 0 {
-			hitRate = float64(st.Hits) / float64(total)
-		}
-		cs = &cacheSnap{Hits: st.Hits, Misses: st.Misses, HitRate: hitRate}
-	}
-
-	type jsonResponse struct {
-		Cache *cacheSnap `json:"cache,omitempty"`
-		Note  string     `json:"note"`
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(jsonResponse{
-		Cache: cs,
-		Note:  "provider health metrics are at inference-gateway /metrics",
-	})
-}

@@ -1,0 +1,415 @@
+{
+  "annotations": { "list": [] },
+  "description": "agentd session, LLM, tool, compaction, and runtime metrics",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["stoa", "agentd"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "agentd",
+  "uid": "stoa-agentd",
+  "version": 1,
+  "panels": [
+
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "id": 1, "title": "Overview", "type": "row" },
+
+    {
+      "id": 2, "type": "stat", "title": "Active Sessions",
+      "gridPos": { "x": 0, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [{ "expr": "sum(agentd_active_sessions)", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "short"
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "textMode": "auto" }
+    },
+
+    {
+      "id": 3, "type": "stat", "title": "Active WebSocket Connections",
+      "gridPos": { "x": 4, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [{ "expr": "agentd_active_websocket_connections", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] },
+          "unit": "short"
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "textMode": "auto" }
+    },
+
+    {
+      "id": 4, "type": "stat", "title": "Sessions Created (5m)",
+      "gridPos": { "x": 8, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [{ "expr": "round(increase(agentd_sessions_created_total[5m]))", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }] },
+          "unit": "short"
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "textMode": "auto" }
+    },
+
+    {
+      "id": 5, "type": "stat", "title": "LLM Success Rate",
+      "gridPos": { "x": 12, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [{
+        "expr": "100 * sum(rate(agentd_llm_requests_total{status=\"success\"}[5m])) / sum(rate(agentd_llm_requests_total[5m]))",
+        "refId": "A"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red",    "value": null },
+              { "color": "yellow", "value": 90   },
+              { "color": "green",  "value": 99   }
+            ]
+          },
+          "unit": "percent",
+          "min": 0, "max": 100
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "textMode": "auto" }
+    },
+
+    {
+      "id": 6, "type": "stat", "title": "Cache Hit Rate",
+      "gridPos": { "x": 16, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [{
+        "expr": "100 * rate(agentd_llm_cache_hits_total[5m]) / (rate(agentd_llm_cache_hits_total[5m]) + rate(agentd_llm_cache_misses_total[5m]))",
+        "refId": "A"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "text",   "value": null },
+              { "color": "yellow", "value": 20   },
+              { "color": "green",  "value": 50   }
+            ]
+          },
+          "unit": "percent",
+          "min": 0, "max": 100,
+          "noValue": "N/A"
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "textMode": "auto" }
+    },
+
+    {
+      "id": 7, "type": "stat", "title": "Compactions (1h)",
+      "gridPos": { "x": 20, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [{ "expr": "round(increase(agentd_compactions_total[1h]))", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }] },
+          "unit": "short"
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "textMode": "auto" }
+    },
+
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 }, "id": 10, "title": "LLM Performance", "type": "row" },
+
+    {
+      "id": 11, "type": "timeseries", "title": "LLM Request Rate",
+      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum by (provider, status) (rate(agentd_llm_requests_total[5m]))", "legendFormat": "{{provider}} / {{status}}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never", "spanNulls": false },
+          "unit": "reqps"
+        }
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 12, "type": "timeseries", "title": "LLM Request Duration",
+      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, provider) (rate(agentd_llm_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{provider}}", "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, provider) (rate(agentd_llm_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{provider}}", "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, provider) (rate(agentd_llm_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p99 {{provider}}", "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 1, "showPoints": "never", "spanNulls": false },
+          "unit": "s"
+        }
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 }, "id": 20, "title": "Tokens", "type": "row" },
+
+    {
+      "id": 21, "type": "timeseries", "title": "Input Tokens Rate",
+      "gridPos": { "x": 0, "y": 15, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum by (provider) (rate(agentd_llm_input_tokens_total[5m]))", "legendFormat": "{{provider}}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never", "spanNulls": false },
+          "unit": "/ s"
+        }
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 22, "type": "timeseries", "title": "Output Tokens Rate",
+      "gridPos": { "x": 12, "y": 15, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum by (provider) (rate(agentd_llm_output_tokens_total[5m]))", "legendFormat": "{{provider}}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never", "spanNulls": false },
+          "unit": "/ s"
+        }
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 }, "id": 30, "title": "Tool Calls", "type": "row" },
+
+    {
+      "id": 31, "type": "timeseries", "title": "Tool Call Rate by Tool",
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum by (tool) (rate(agentd_tool_calls_total[5m]))", "legendFormat": "{{tool}}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 1, "showPoints": "never", "spanNulls": false },
+          "unit": "reqps"
+        }
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 32, "type": "timeseries", "title": "Tool Error Rate",
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum by (tool) (rate(agentd_tool_calls_total{status=~\"error|not_found\"}[5m]))",
+          "legendFormat": "{{tool}}", "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "red" },
+          "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 0, "showPoints": "never", "spanNulls": false },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }, "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 33, "type": "timeseries", "title": "Tool Call Duration (p95 by tool)",
+      "gridPos": { "x": 0, "y": 32, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, tool) (rate(agentd_tool_call_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{tool}}", "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 1, "showPoints": "never", "spanNulls": false },
+          "unit": "s"
+        }
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 34, "type": "bargauge", "title": "Total Tool Invocations",
+      "gridPos": { "x": 12, "y": 32, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sort_desc(sum by (tool) (increase(agentd_tool_calls_total{status=\"success\"}[1h])))",
+          "legendFormat": "{{tool}}", "refId": "A", "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        }
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showUnfilled": true,
+        "valueMode": "color"
+      }
+    },
+
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 }, "id": 40, "title": "Compaction & Cache", "type": "row" },
+
+    {
+      "id": 41, "type": "timeseries", "title": "Compaction Events",
+      "gridPos": { "x": 0, "y": 41, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum by (trigger) (rate(agentd_compactions_total[5m]))", "legendFormat": "{{trigger}}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 0, "showPoints": "never", "spanNulls": false },
+          "unit": "/ s"
+        }
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 42, "type": "timeseries", "title": "LLM Cache Hits vs Misses",
+      "gridPos": { "x": 12, "y": 41, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "rate(agentd_llm_cache_hits_total[5m])",   "legendFormat": "hits",   "refId": "A" },
+        { "expr": "rate(agentd_llm_cache_misses_total[5m])", "legendFormat": "misses",  "refId": "B" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 1, "showPoints": "never", "spanNulls": false },
+          "unit": "reqps"
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "misses" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+
+    { "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 }, "id": 50, "title": "Go Runtime", "type": "row" },
+
+    {
+      "id": 51, "type": "timeseries", "title": "Goroutines",
+      "gridPos": { "x": 0, "y": 50, "w": 8, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "go_goroutines{job=\"agentd\"}", "legendFormat": "goroutines", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "purple" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never", "spanNulls": false },
+          "unit": "short"
+        }
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } }
+    },
+
+    {
+      "id": 52, "type": "timeseries", "title": "Heap Memory",
+      "gridPos": { "x": 8, "y": 50, "w": 8, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "go_memstats_alloc_bytes{job=\"agentd\"}",     "legendFormat": "alloc",     "refId": "A" },
+        { "expr": "go_memstats_heap_inuse_bytes{job=\"agentd\"}", "legendFormat": "heap inuse", "refId": "B" },
+        { "expr": "go_memstats_sys_bytes{job=\"agentd\"}",        "legendFormat": "sys",        "refId": "C" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never", "spanNulls": false },
+          "unit": "bytes"
+        }
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 53, "type": "timeseries", "title": "CPU Usage",
+      "gridPos": { "x": 16, "y": 50, "w": 8, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "rate(process_cpu_seconds_total{job=\"agentd\"}[1m])", "legendFormat": "cpu", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "orange" },
+          "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 1, "showPoints": "never", "spanNulls": false },
+          "unit": "percentunit",
+          "min": 0
+        }
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } }
+    }
+
+  ]
+}

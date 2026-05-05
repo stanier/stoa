@@ -15,6 +15,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stanier/stoa/internal/apikeydclient"
 	"github.com/stanier/stoa/internal/authdb"
 	"github.com/stanier/stoa/internal/logging"
@@ -48,6 +51,10 @@ type Server struct {
 	// Used to provision per-user stoa-infgw_* keys at login time (best-effort).
 	apikeydClient     *apikeydclient.Client
 	apikeydAdminToken string
+
+	promReg        *prometheus.Registry
+	metrics        *authdMetrics
+	metricsHandler http.Handler
 }
 
 // NewServer constructs, configures, and wires up a Server.
@@ -115,13 +122,22 @@ func NewServer(cfg Config) (*Server, error) {
 		logging.Infof("authd: provider %q ready (%s)", p.id, p.issuerURL)
 	}
 
+	promReg := prometheus.NewRegistry()
+	promReg.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+	s.metrics = newAuthdMetrics(promReg)
+	s.promReg = promReg
+	s.metricsHandler = promhttp.HandlerFor(promReg, promhttp.HandlerOpts{})
+
 	s.registerRoutes()
 	return s, nil
 }
 
-// Router returns the HTTP handler for the server.
+// Router returns the HTTP handler for the server, wrapped with metrics middleware.
 func (s *Server) Router() http.Handler {
-	return s.mux
+	return s.metrics.middleware(s.mux)
 }
 
 // redirectURI constructs the absolute OAuth2 callback URL.
@@ -160,6 +176,7 @@ func (s *Server) findProvider(id string) *provider {
 }
 
 func (s *Server) registerRoutes() {
+	s.mux.Handle("/metrics", s.metricsHandler)
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
 	s.mux.HandleFunc("/oauth/login", s.handleLoginStart)
 	s.mux.HandleFunc("/oauth/login/poll", s.handleLoginPoll)

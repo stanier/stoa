@@ -101,7 +101,7 @@ func authdMiddlewareWithAPIKeyd(ac *authdclient.Client, akc *apikeydclient.Clien
 // /auth/* endpoints are exempt so clients can initiate flows.
 // /healthz and /acp/ping are always open.
 func isExempt(path string) bool {
-	return strings.HasPrefix(path, "/auth/") || path == "/healthz" || path == "/acp/ping"
+	return strings.HasPrefix(path, "/auth/") || path == "/healthz" || path == "/acp/ping" || path == "/metrics"
 }
 
 // bearerToken extracts the token from "Authorization: Bearer <token>".

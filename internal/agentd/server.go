@@ -8,6 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stanier/stoa/internal/agentdb"
 	"github.com/stanier/stoa/internal/chat"
 	"github.com/stanier/stoa/internal/agentskills"
@@ -58,6 +61,10 @@ type Server struct {
 	// agentDB is optional Postgres persistence for sessions and messages.
 	// When nil, falls back to filesystem (AGENTD_SESSION_DIR).
 	agentDB *agentdb.DB
+
+	metrics    *Metrics
+	promReg    *prometheus.Registry
+	metricsHandler http.Handler
 
 	sessions map[string]*Session
 	mu       sync.RWMutex
@@ -133,6 +140,15 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		logging.Infof("agentd: response cache enabled (ttl=%s, max_entries=%d)", cfg.Gateway.Cache.TTL, cfg.Gateway.Cache.MaxEntries)
 	}
 
+	// Build a dedicated Prometheus registry so agentd metrics are isolated from
+	// any global defaults that might bleed in from test harnesses or other packages.
+	promReg := prometheus.NewRegistry()
+	promReg.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+	metrics := NewMetrics(promReg, llmCache)
+
 	s := &Server{
 		cfg:              cfg,
 		llmClient:        llmClient,
@@ -147,6 +163,9 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		acpRuns:          make(map[string]*ACPRun),
 		httpClient:       &http.Client{Timeout: 5 * time.Minute},
 		stopCh:           make(chan struct{}),
+		metrics:          metrics,
+		promReg:          promReg,
+		metricsHandler:   promhttp.HandlerFor(promReg, promhttp.HandlerOpts{}),
 	}
 
 	// Background cleanup: remove completed/failed/cancelled runs older than 24h.
@@ -350,7 +369,7 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/sessions/", s.handleSessionSubroute)
 	mux.HandleFunc("/tools", s.handleListTools)
 	mux.HandleFunc("/models", s.handleGetModels)
-	mux.HandleFunc("/metrics", s.handleMetrics)
+	mux.Handle("/metrics", s.metricsHandler)
 
 	// Agent registry CRUD.
 	mux.HandleFunc("/agents", s.handleAgents)

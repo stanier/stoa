@@ -1,0 +1,24 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: agentd
+    static_configs:
+      - targets: ['agentd:7777']
+
+  - job_name: inference-gateway
+    static_configs:
+      - targets: ['inference-gateway:8080']
+
+  - job_name: authd
+    static_configs:
+      - targets: ['authd:8888']
+
+  - job_name: apikeyd
+    static_configs:
+      - targets: ['apikeyd:8889']

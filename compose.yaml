@@ -765,6 +765,76 @@ services:
       - label=disable
       - no-new-privileges:true
 
+  # ---------------------------------------------------------------------------
+  # prometheus — metrics collection
+  # On monitoring-net (internal) for Grafana, and agent-external to scrape services.
+  # ---------------------------------------------------------------------------
+
+  prometheus:
+    image: docker.io/prom/prometheus:v3
+    container_name: stoa-prometheus
+    user: "65534:65534"
+    mem_limit: 512m
+    memswap_limit: 512m
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    networks:
+      - monitoring-net
+      - agent-external
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # ---------------------------------------------------------------------------
+  # grafana — metrics visualization
+  # Port 3000 exposed. Prometheus auto-provisioned as default datasource.
+  # GRAFANA_ADMIN_PASSWORD must be set in .env.
+  # ---------------------------------------------------------------------------
+
+  grafana:
+    image: docker.io/grafana/grafana:13.1.0-25351545110
+    container_name: stoa-grafana
+    mem_limit: 256m
+    memswap_limit: 256m
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    networks:
+      - monitoring-net
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
   squid:
     image: ubuntu/squid:latest
     container_name: stoa-squid
@@ -876,6 +946,13 @@ networks:
       config:
         - subnet: 172.28.6.0/24
 
+  # -- Monitoring (internal — Grafana ↔ Prometheus) -------------------------
+
+  monitoring-net:
+    driver: bridge
+    name: monitoring-net
+    internal: true
+
 secrets:
   anthropic_api_key:
     external: true
@@ -903,3 +980,5 @@ volumes:
   squid-cache:
   garage-meta:
   garage-data:
+  prometheus-data:
+  grafana-data:

@@ -15,6 +15,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stanier/stoa/internal/apikeydclient"
 	"github.com/stanier/stoa/internal/chat"
 	"github.com/stanier/stoa/internal/llm"
@@ -54,12 +57,15 @@ type Config struct {
 
 // Server is an HTTP server that proxies LLM API requests.
 type Server struct {
-	cfg       Config
-	router    *Router
-	keyClient *apikeydclient.Client // nil = no auth required
-	statsReg  *stats.Registry       // always non-nil
-	limiter   *ratelimit.Limiter    // nil when rate limiting is disabled
-	hooks     Hooks
+	cfg            Config
+	router         *Router
+	keyClient      *apikeydclient.Client // nil = no auth required
+	statsReg       *stats.Registry       // always non-nil
+	limiter        *ratelimit.Limiter    // nil when rate limiting is disabled
+	hooks          Hooks
+	promReg        *prometheus.Registry
+	metrics        *gwMetrics
+	metricsHandler http.Handler
 }
 
 // NewServer creates a proxy Server from the given Config.
@@ -80,6 +86,33 @@ func NewServer(cfg Config) (*Server, error) {
 		s.limiter = ratelimit.New(time.Minute, cfg.Gateway.RateLimit.RequestsPerMinute)
 		logging.Infof("proxy: rate limiting enabled (%d req/min per user)", cfg.Gateway.RateLimit.RequestsPerMinute)
 	}
+
+	promReg := prometheus.NewRegistry()
+	promReg.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+	m := newGWMetrics(promReg)
+	s.promReg = promReg
+	s.metrics = m
+	s.metricsHandler = promhttp.HandlerFor(promReg, promhttp.HandlerOpts{})
+
+	// Record completion-level metrics via PostResponseHook so both streaming
+	// and non-streaming paths are covered without touching each handler.
+	s.hooks.PostResponse = append(s.hooks.PostResponse, func(_ context.Context, resp *HookResponse) {
+		status := "success"
+		if resp.Err != nil {
+			status = "error"
+		}
+		m.completionsTotal.WithLabelValues(resp.Model, status).Inc()
+		if resp.InputTokens > 0 {
+			m.inputTokens.WithLabelValues(resp.Model).Add(float64(resp.InputTokens))
+		}
+		if resp.OutputTokens > 0 {
+			m.outputTokens.WithLabelValues(resp.Model).Add(float64(resp.OutputTokens))
+		}
+	})
+
 	return s, nil
 }
 
@@ -147,7 +180,7 @@ func (s *Server) Handler() http.Handler {
 	// Models listing (best-effort: return models from all upstreams)
 	mux.Handle("/v1/models", auth(http.HandlerFunc(s.handleModels)))
 	// Metrics — auth-exempt so Prometheus scrapers do not need an API key.
-	mux.HandleFunc("/metrics", s.handleMetrics)
+	mux.Handle("/metrics", s.metricsHandler)
 	// Health — auth-exempt for container health checks.
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	return corsMiddleware(requestIDMiddleware(stripSDKHeaders(mux)))
@@ -166,13 +199,17 @@ func (s *Server) resolveAndStream(model string, fn streamFn) (<-chan llm.StreamC
 		ch, headers, err := fn(up)
 		if err == nil {
 			if s.statsReg != nil {
-				ch = wrapStream(ch, start, up.Name(), s.statsReg)
+				ch = wrapStream(ch, start, up.Name(), s.statsReg, s.metrics)
 			}
 			return ch, headers, nil
 		}
-		elapsed := time.Since(start).Milliseconds()
+		elapsed := time.Since(start)
 		if s.statsReg != nil {
-			s.statsReg.Get(up.Name()).Record(elapsed, true)
+			s.statsReg.Get(up.Name()).Record(elapsed.Milliseconds(), true)
+		}
+		if s.metrics != nil {
+			s.metrics.upstreamTotal.WithLabelValues(up.Name(), "error").Inc()
+			s.metrics.upstreamDuration.WithLabelValues(up.Name()).Observe(elapsed.Seconds())
 		}
 		if llm.IsRetryable(err) {
 			logging.Warnf("proxy: upstream %q retryable error, trying next: %v", up.Name(), err)
@@ -188,7 +225,7 @@ func (s *Server) resolveAndStream(model string, fn streamFn) (<-chan llm.StreamC
 }
 
 // wrapStream passes all chunks through and records stats when the stream closes.
-func wrapStream(src <-chan llm.StreamChunk, start time.Time, provider string, reg *stats.Registry) <-chan llm.StreamChunk {
+func wrapStream(src <-chan llm.StreamChunk, start time.Time, provider string, reg *stats.Registry, m *gwMetrics) <-chan llm.StreamChunk {
 	out := make(chan llm.StreamChunk, cap(src)+1)
 	go func() {
 		defer close(out)
@@ -199,7 +236,16 @@ func wrapStream(src <-chan llm.StreamChunk, start time.Time, provider string, re
 			}
 			out <- chunk
 		}
-		reg.Get(provider).Record(time.Since(start).Milliseconds(), hasErr)
+		elapsed := time.Since(start)
+		reg.Get(provider).Record(elapsed.Milliseconds(), hasErr)
+		if m != nil {
+			status := "success"
+			if hasErr {
+				status = "error"
+			}
+			m.upstreamTotal.WithLabelValues(provider, status).Inc()
+			m.upstreamDuration.WithLabelValues(provider).Observe(elapsed.Seconds())
+		}
 	}()
 	return out
 }
@@ -211,71 +257,6 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"ok"}`)) //nolint:errcheck
 }
 
-// handleMetrics serves provider health statistics in JSON or Prometheus text format.
-// This endpoint is auth-exempt.
-func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	accept := r.Header.Get("Accept")
-	wantPrometheus := strings.Contains(accept, "application/openmetrics-text") ||
-		strings.Contains(accept, "text/plain")
-
-	snap := s.statsReg.Snapshot()
-
-	type providerSnap struct {
-		RequestCount int     `json:"request_count"`
-		ErrorRate    float64 `json:"error_rate"`
-		P95LatencyMs int64   `json:"p95_latency_ms"`
-	}
-	providers := make(map[string]providerSnap, len(snap))
-	for name, ps := range snap {
-		providers[name] = providerSnap{
-			RequestCount: ps.RequestCount,
-			ErrorRate:    ps.ErrorRate,
-			P95LatencyMs: ps.P95LatencyMs,
-		}
-	}
-
-	type rateLimitSnap struct {
-		Enabled bool `json:"enabled"`
-	}
-	var rl *rateLimitSnap
-	if s.limiter != nil {
-		rl = &rateLimitSnap{Enabled: true}
-	}
-
-	if wantPrometheus {
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		b := &strings.Builder{}
-		b.WriteString("# HELP stoa_proxy_requests_total Total LLM requests per upstream\n")
-		b.WriteString("# TYPE stoa_proxy_requests_total counter\n")
-		for name, ps := range providers {
-			fmt.Fprintf(b, "stoa_proxy_requests_total{upstream=%q} %d\n", name, ps.RequestCount)
-		}
-		b.WriteString("# HELP stoa_proxy_error_rate Error rate (0-1) per upstream\n")
-		b.WriteString("# TYPE stoa_proxy_error_rate gauge\n")
-		for name, ps := range providers {
-			fmt.Fprintf(b, "stoa_proxy_error_rate{upstream=%q} %g\n", name, ps.ErrorRate)
-		}
-		b.WriteString("# HELP stoa_proxy_p95_latency_ms P95 latency in ms per upstream\n")
-		b.WriteString("# TYPE stoa_proxy_p95_latency_ms gauge\n")
-		for name, ps := range providers {
-			fmt.Fprintf(b, "stoa_proxy_p95_latency_ms{upstream=%q} %d\n", name, ps.P95LatencyMs)
-		}
-		_, _ = io.WriteString(w, b.String())
-		return
-	}
-
-	type jsonResponse struct {
-		Upstreams map[string]providerSnap `json:"upstreams"`
-		RateLimit *rateLimitSnap          `json:"rate_limit,omitempty"`
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(jsonResponse{Upstreams: providers, RateLimit: rl})
-}
 
 // stripSDKHeaders removes SDK telemetry headers (e.g. x-stainless-*) before
 // forwarding to upstream providers, since they are instrumentation-only and

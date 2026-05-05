@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/stanier/stoa/internal/agentproto"
 	"github.com/stanier/stoa/internal/chat"
@@ -116,16 +117,20 @@ func runAgenticLoop(
 		}
 
 		s.runPreLLM(ctx, sess.id, msgs)
+		provider := effectiveProvider(s, overrides)
+		llmStart := time.Now()
 		responseChan, err := llmClient.StreamMessage(callCtx, msgs, llmTools)
 		if err != nil {
 			logging.Errorf("agentd: LLM stream error (session %s): %v", sess.id, err)
+			s.metrics.llmRequestsTotal.WithLabelValues(provider, "error").Inc()
 			return finalResponse, finalThinkingB.String(), lastInputTokens, totalOutputTokens, fmt.Errorf("LLM stream error: %w", err)
 		}
 
 		var (
-			iterContent        strings.Builder
-			iterThinking       strings.Builder
-			toolUse            *llm.ToolUse
+			iterContent          strings.Builder
+			iterThinking         strings.Builder
+			iterOutputTokens     int
+			toolUse              *llm.ToolUse
 			inputAnonymizations  []presidio.AnonymizationRecord
 			outputAnonymizations []presidio.AnonymizationRecord
 		)
@@ -161,6 +166,7 @@ func runAgenticLoop(
 			}
 			if chunk.Done {
 				lastInputTokens = chunk.InputTokens
+				iterOutputTokens = chunk.OutputTokens
 				totalOutputTokens += chunk.OutputTokens
 				if s.agentDB != nil && sess.userID != "" && chunk.InputTokens > 0 {
 					providerName := "default"
@@ -181,6 +187,14 @@ func runAgenticLoop(
 					OutputAnonymizations: outputAnonymizations,
 				},
 			})
+		}
+		s.metrics.llmRequestDuration.WithLabelValues(provider).Observe(time.Since(llmStart).Seconds())
+		s.metrics.llmRequestsTotal.WithLabelValues(provider, "success").Inc()
+		if lastInputTokens > 0 {
+			s.metrics.llmInputTokens.WithLabelValues(provider).Add(float64(lastInputTokens))
+		}
+		if iterOutputTokens > 0 {
+			s.metrics.llmOutputTokens.WithLabelValues(provider).Add(float64(iterOutputTokens))
 		}
 		s.runPostLLM(ctx, sess.id, iterContent.String(), iterThinking.String())
 
@@ -290,6 +304,18 @@ func runAgenticLoop(
 	return finalResponse, finalThinking, lastInputTokens, totalOutputTokens, nil
 }
 
+// effectiveProvider returns the provider name to use for metric labels.
+// Prefers the per-session override, falls back to the config default.
+func effectiveProvider(s *Server, overrides *llm.Overrides) string {
+	if overrides != nil && overrides.Provider != nil {
+		return *overrides.Provider
+	}
+	if dp := s.cfg.LLM.DefaultProvider(); dp != nil {
+		return dp.Name
+	}
+	return "unknown"
+}
+
 // sessionListTool returns the list_tools tool as an llm.Tool slice for use as the
 // initial restricted tool set. Called with sess.mu held.
 func sessionListTool(sess *Session) []llm.Tool {
@@ -316,6 +342,7 @@ func executeToolCall(
 	iteration int,
 ) (string, bool, error) {
 	logging.Infof("agentd: tool call %q (iteration %d, session %s)", toolUse.Name, iteration+1, sess.id)
+	toolStart := time.Now()
 
 	// Parse parameters for display and registry.
 	var params map[string]interface{}
@@ -332,6 +359,7 @@ func executeToolCall(
 		tool, ok = s.skillRegistry.GetTool(toolUse.Name)
 	}
 	if !ok {
+		s.metrics.toolCallsTotal.WithLabelValues(toolUse.Name, "not_found").Inc()
 		errMsg := fmt.Sprintf("Tool '%s' does not exist. Use only tools listed in your system prompt.", toolUse.Name)
 		logging.Warnf("agentd: tool not found: %s", toolUse.Name)
 
@@ -347,11 +375,14 @@ func executeToolCall(
 
 	// Execute the tool.
 	result, err := tool.Execute(ctx, json.RawMessage(toolUse.Parameters))
+	s.metrics.toolCallDuration.WithLabelValues(toolUse.Name).Observe(time.Since(toolStart).Seconds())
 	if err != nil {
+		s.metrics.toolCallsTotal.WithLabelValues(toolUse.Name, "error").Inc()
 		return "", false, fmt.Errorf("tool execution failed: %w", err)
 	}
 
 	if !result.Success {
+		s.metrics.toolCallsTotal.WithLabelValues(toolUse.Name, "error").Inc()
 		logging.Warnf("agentd: tool %s returned error: %s", toolUse.Name, result.Error)
 
 		sess.mu.Lock()
@@ -364,6 +395,7 @@ func executeToolCall(
 		return "ERROR: " + result.Error, true, nil
 	}
 
+	s.metrics.toolCallsTotal.WithLabelValues(toolUse.Name, "success").Inc()
 	logging.Infof("agentd: tool %s returned %d bytes", toolUse.Name, len(result.Content))
 
 	// Truncate oversized results to protect the LLM context window.
