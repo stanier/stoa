@@ -237,7 +237,7 @@ func (s *Server) runACPSync(ctx context.Context, run *ACPRun, sess *Session, con
 		}
 	}
 
-	_, _, _, _, err := handleMessage(s, sess, content, sendEvent)
+	_, _, _, _, err := handleMessage(s, sess, content, nil, sendEvent)
 	now := time.Now()
 
 	run.mu.Lock()
@@ -298,7 +298,7 @@ func (s *Server) runACPStream(ctx context.Context, w http.ResponseWriter, run *A
 	}
 	doneCh := make(chan result, 1)
 	go func() {
-		_, _, _, _, err := handleMessage(s, sess, content, sendEvent)
+		_, _, _, _, err := handleMessage(s, sess, content, nil, sendEvent)
 		doneCh <- result{err: err}
 	}()
 

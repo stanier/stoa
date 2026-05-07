@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/stanier/stoa/internal/chat"
 	"github.com/stanier/stoa/internal/config"
@@ -63,6 +64,60 @@ func newAnthropicClientWithHTTP(pc *config.LLMProviderConfig, httpClient *http.C
 	}, nil
 }
 
+// anthropicUserMessage builds an Anthropic user message param, including image
+// parts when the message carries vision content. Mirrors openAIUserMessage.
+func anthropicUserMessage(msg chat.Message) anthropic.MessageParam {
+	if len(msg.ImageParts) == 0 {
+		return anthropic.NewUserMessage(anthropic.NewTextBlock(msg.Content))
+	}
+	blocks := make([]anthropic.ContentBlockParamUnion, 0, len(msg.ImageParts)+1)
+	for _, ip := range msg.ImageParts {
+		if strings.HasPrefix(ip.URL, "data:") {
+			// data:<mediaType>;base64,<data>
+			semi := strings.Index(ip.URL, ";")
+			comma := strings.Index(ip.URL, ",")
+			if semi > 5 && comma > semi {
+				mediaType := ip.URL[5:semi]
+				b64Data := ip.URL[comma+1:]
+				blocks = append(blocks, anthropic.ContentBlockParamUnion{
+					OfImage: &anthropic.ImageBlockParam{
+						Type: "image",
+						Source: anthropic.ImageBlockParamSourceUnion{
+							OfBase64: &anthropic.Base64ImageSourceParam{
+								Type:      "base64",
+								MediaType: anthropic.Base64ImageSourceMediaType(mediaType),
+								Data:      b64Data,
+							},
+						},
+					},
+				})
+				continue
+			}
+		}
+		// Fall back to URL source for https:// links.
+		blocks = append(blocks, anthropic.ContentBlockParamUnion{
+			OfImage: &anthropic.ImageBlockParam{
+				Type: "image",
+				Source: anthropic.ImageBlockParamSourceUnion{
+					OfURL: &anthropic.URLImageSourceParam{
+						Type: "url",
+						URL:  ip.URL,
+					},
+				},
+			},
+		})
+	}
+	if msg.Content != "" {
+		blocks = append(blocks, anthropic.ContentBlockParamUnion{
+			OfText: &anthropic.TextBlockParam{Text: msg.Content},
+		})
+	}
+	return anthropic.MessageParam{
+		Role:    anthropic.MessageParamRoleUser,
+		Content: blocks,
+	}
+}
+
 // convertToolsToAnthropic converts our Tool format to Anthropic SDK format
 func convertToolsToAnthropic(tools []Tool) []anthropic.ToolUnionParam {
 	result := make([]anthropic.ToolUnionParam, len(tools))
@@ -99,35 +154,23 @@ func (c *AnthropicClient) SendMessage(ctx context.Context, messages []chat.Messa
 		apiMessages = rebuildAnthropicMessages(raw.Messages)
 		systemBlocks = rebuildAnthropicSystem(raw.System)
 	} else {
-	apiMessages = make([]anthropic.MessageParam, 0, len(messages))
-	for _, msg := range messages {
-		switch msg.Role {
-		case chat.RoleSystem:
-			// Anthropic uses a separate system parameter
-			systemBlocks = append(systemBlocks, anthropic.TextBlockParam{
-				Text: msg.Content,
-			})
-		case chat.RoleUser:
-			apiMessages = append(apiMessages, anthropic.MessageParam{
-				Role: anthropic.MessageParamRoleUser,
-				Content: []anthropic.ContentBlockParamUnion{{
-					OfText: &anthropic.TextBlockParam{
-						Text: msg.Content,
-					},
-				}},
-			})
-		case chat.RoleAssistant:
-			apiMessages = append(apiMessages, anthropic.MessageParam{
-				Role: anthropic.MessageParamRoleAssistant,
-				Content: []anthropic.ContentBlockParamUnion{{
-					OfText: &anthropic.TextBlockParam{
-						Text: msg.Content,
-					},
-				}},
-			})
+		apiMessages = make([]anthropic.MessageParam, 0, len(messages))
+		for _, msg := range messages {
+			switch msg.Role {
+			case chat.RoleSystem:
+				systemBlocks = append(systemBlocks, anthropic.TextBlockParam{Text: msg.Content})
+			case chat.RoleUser:
+				apiMessages = append(apiMessages, anthropicUserMessage(msg))
+			case chat.RoleAssistant:
+				apiMessages = append(apiMessages, anthropic.MessageParam{
+					Role: anthropic.MessageParamRoleAssistant,
+					Content: []anthropic.ContentBlockParamUnion{{
+						OfText: &anthropic.TextBlockParam{Text: msg.Content},
+					}},
+				})
+			}
 		}
-	}   // end for loop
-	}   // end else (chat.Message path)
+	}
 
 	// Merge model override from context if present.
 	ov := OverridesFromContext(ctx)
@@ -219,31 +262,19 @@ func (c *AnthropicClient) StreamMessage(ctx context.Context, messages []chat.Mes
 		for _, msg := range messages {
 			switch msg.Role {
 			case chat.RoleSystem:
-				// Anthropic uses a separate system parameter
-				systemBlocks = append(systemBlocks, anthropic.TextBlockParam{
-					Text: msg.Content,
-				})
+				systemBlocks = append(systemBlocks, anthropic.TextBlockParam{Text: msg.Content})
 			case chat.RoleUser:
-				apiMessages = append(apiMessages, anthropic.MessageParam{
-					Role: anthropic.MessageParamRoleUser,
-					Content: []anthropic.ContentBlockParamUnion{{
-						OfText: &anthropic.TextBlockParam{
-							Text: msg.Content,
-						},
-					}},
-				})
+				apiMessages = append(apiMessages, anthropicUserMessage(msg))
 			case chat.RoleAssistant:
 				apiMessages = append(apiMessages, anthropic.MessageParam{
 					Role: anthropic.MessageParamRoleAssistant,
 					Content: []anthropic.ContentBlockParamUnion{{
-						OfText: &anthropic.TextBlockParam{
-							Text: msg.Content,
-						},
+						OfText: &anthropic.TextBlockParam{Text: msg.Content},
 					}},
 				})
 			}
 		}
-	} // end else (chat.Message path)
+	}
 
 	// Create message parameters — MaxTokens set below after merging overrides.
 	params := anthropic.MessageNewParams{

@@ -2,8 +2,11 @@ package webd
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -11,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	xws "golang.org/x/net/websocket"
 
+	"github.com/stanier/stoa/internal/agentproto"
 	"github.com/stanier/stoa/internal/logging"
 )
 
@@ -87,6 +91,7 @@ func (s *Server) handleWSProxy(w http.ResponseWriter, r *http.Request) {
 				errc <- err
 				return
 			}
+			data = s.processAttachments(r.Context(), data)
 			if err := xws.Message.Send(agentConn, string(data)); err != nil {
 				errc <- err
 				return
@@ -175,6 +180,81 @@ func (s *Server) handleAgentsProxy(w http.ResponseWriter, r *http.Request) {
 		targetURL += "?" + r.URL.RawQuery
 	}
 	s.proxyToAgentd(w, r, targetURL, token)
+}
+
+// processAttachments intercepts send_message WebSocket frames that carry attachment
+// refs from the browser. Image attachments are fetched and inlined as base64
+// ImageParts; other file types get a text note appended so the agent can call a
+// retrieval tool. The Attachments field is cleared before forwarding to agentd.
+// Non-send_message frames are returned unchanged.
+func (s *Server) processAttachments(ctx context.Context, frame []byte) []byte {
+	var msg agentproto.ClientMessage
+	if err := json.Unmarshal(frame, &msg); err != nil {
+		return frame
+	}
+	if msg.Type != agentproto.MessageTypeSendMessage || msg.SendMessage == nil || len(msg.SendMessage.Attachments) == 0 {
+		return frame
+	}
+
+	payload := msg.SendMessage
+	var textNotes []string
+
+	for _, ref := range payload.Attachments {
+		isImage := strings.HasPrefix(ref.MimeType, "image/")
+		if isImage && s.cfg.AutoEmbedAttachments {
+			data, err := s.fetchAttachmentBytes(ctx, ref)
+			if err != nil {
+				logging.Warnf("webd: attachment embed failed for %q: %v", ref.Name, err)
+				textNotes = append(textNotes, attachmentTextNote(ref))
+				continue
+			}
+			encoded := base64.StdEncoding.EncodeToString(data)
+			payload.ImageParts = append(payload.ImageParts, agentproto.ImagePart{
+				URL: fmt.Sprintf("data:%s;base64,%s", ref.MimeType, encoded),
+			})
+		} else {
+			textNotes = append(textNotes, attachmentTextNote(ref))
+		}
+	}
+
+	payload.Attachments = nil
+
+	if len(textNotes) > 0 {
+		note := "[Attachments]\n" + strings.Join(textNotes, "\n")
+		if payload.Content != "" {
+			payload.Content = note + "\n\n" + payload.Content
+		} else {
+			payload.Content = note
+		}
+	}
+
+	out, err := json.Marshal(msg)
+	if err != nil {
+		return frame
+	}
+	return out
+}
+
+// fetchAttachmentBytes retrieves the raw bytes for an attachment ref.
+func (s *Server) fetchAttachmentBytes(ctx context.Context, ref agentproto.AttachmentRef) ([]byte, error) {
+	if ref.AttachmentID != "" {
+		return s.resolveS3Attachment(ctx, ref.AttachmentID)
+	}
+	if ref.Path != "" {
+		return resolveLocalAttachment(ref.Path)
+	}
+	return nil, fmt.Errorf("attachment has neither attachment_id nor path")
+}
+
+// attachmentTextNote formats a retrieval hint for non-embedded attachments.
+func attachmentTextNote(ref agentproto.AttachmentRef) string {
+	ref_str := ref.AttachmentID
+	ref_type := "attachment"
+	if ref_str == "" {
+		ref_str = ref.Path
+		ref_type = "path"
+	}
+	return fmt.Sprintf("- %s (%s: %s, size: %d bytes)", ref.Name, ref_type, ref_str, ref.Size)
 }
 
 // proxyToAgentd forwards an HTTP request to agentd, injecting the Bearer token.

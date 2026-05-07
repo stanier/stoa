@@ -38,16 +38,24 @@ type Config struct {
 	// mcp-attachments MCP server so it can validate and resolve IDs back to S3 keys.
 	// Required when S3 is configured.
 	AttachmentSecret []byte
+
+	// AutoEmbedAttachments controls whether image attachments are fetched and
+	// inlined as native multimodal content before the message reaches agentd.
+	// When false the agent receives a text note and must call a retrieval tool.
+	// Default: true.
+	AutoEmbedAttachments bool
 }
 
 // LoadConfig reads webd configuration from environment variables.
 func LoadConfig() (*Config, error) {
+	autoEmbed := os.Getenv("WEBD_AUTO_EMBED_ATTACHMENTS") != "false"
 	cfg := &Config{
-		Port:        envOr("WEBD_PORT", "3000"),
-		AuthdURL:    strings.TrimRight(envOr("WEBD_AUTHD_URL", "http://authd:8888"), "/"),
-		AgentdURL:   strings.TrimRight(envOr("WEBD_AGENTD_URL", "http://agentd:7777"), "/"),
-		APIKeydURL:  strings.TrimRight(envOr("WEBD_APIKEYD_URL", "http://apikeyd:8889"), "/"),
-		ExternalURL: strings.TrimRight(os.Getenv("WEBD_EXTERNAL_URL"), "/"),
+		Port:                 envOr("WEBD_PORT", "3000"),
+		AuthdURL:             strings.TrimRight(envOr("WEBD_AUTHD_URL", "http://authd:8888"), "/"),
+		AgentdURL:            strings.TrimRight(envOr("WEBD_AGENTD_URL", "http://agentd:7777"), "/"),
+		APIKeydURL:           strings.TrimRight(envOr("WEBD_APIKEYD_URL", "http://apikeyd:8889"), "/"),
+		ExternalURL:          strings.TrimRight(os.Getenv("WEBD_EXTERNAL_URL"), "/"),
+		AutoEmbedAttachments: autoEmbed,
 	}
 
 	if cfg.ExternalURL == "" {

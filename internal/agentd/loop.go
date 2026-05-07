@@ -22,13 +22,18 @@ func handleMessage(
 	s *Server,
 	sess *Session,
 	content string,
+	imageParts []chat.ImagePart,
 	sendEvent func(agentproto.Event),
 ) (string, string, int, int, error) {
 	logging.Infof("agentd: processing message (len=%d, session %s)", len(content), sess.id)
 
-	// Append user message.
+	// Append user message, including any inlined image parts.
+	msg := chat.NewUserMessage(content)
+	if len(imageParts) > 0 {
+		msg.ImageParts = imageParts
+	}
 	sess.mu.Lock()
-	sess.messages = append(sess.messages, chat.NewUserMessage(content))
+	sess.messages = append(sess.messages, msg)
 	sess.mu.Unlock()
 	_ = sess.tracer.LogUserMessage(content)
 

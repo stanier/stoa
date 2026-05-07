@@ -789,10 +789,14 @@ func (s *Server) serveWebSocket(ws *websocket.Conn, sess *Session, token string)
 
 		switch msg.Type {
 		case agentproto.MessageTypeSendMessage:
-			if msg.SendMessage == nil || msg.SendMessage.Content == "" {
+			if msg.SendMessage == nil || (msg.SendMessage.Content == "" && len(msg.SendMessage.ImageParts) == 0) {
 				continue
 			}
 			content := msg.SendMessage.Content
+			imageParts := make([]chat.ImagePart, len(msg.SendMessage.ImageParts))
+			for i, ip := range msg.SendMessage.ImageParts {
+				imageParts[i] = chat.ImagePart{URL: ip.URL, Detail: ip.Detail}
+			}
 
 			// Acquire the semaphore (non-blocking). Reject if previous loop is still running.
 			select {
@@ -809,7 +813,7 @@ func (s *Server) serveWebSocket(ws *websocket.Conn, sess *Session, token string)
 			// process "perm_response" messages while the loop is executing.
 			go func() {
 				defer func() { <-agentSem }()
-				finalContent, finalThinking, inputTokens, outputTokens, err := handleMessage(s, sess, content, sendEvent)
+				finalContent, finalThinking, inputTokens, outputTokens, err := handleMessage(s, sess, content, imageParts, sendEvent)
 				sess.mu.Lock()
 				sess.totalOutputTokens += outputTokens
 				sess.mu.Unlock()

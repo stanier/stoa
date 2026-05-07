@@ -116,7 +116,7 @@
     if (!destroyed) openWS()
   })
 
-  // S3 mode: agent calls read_attachment(attachment_id); local fallback uses filesystem path.
+  // Legacy prefixes emitted by older clients — kept only for history display.
   const ATTACH_PREFIX_ID   = '[Attachments — use read_attachment to read them]\n'
   const ATTACH_PREFIX_PATH = '[Attachments — use mcp_filesystem_read_file to read them]\n'
 
@@ -368,7 +368,7 @@
         const res = await fetch('/api/upload', { method: 'POST', body: form })
         if (!res.ok) { error = `Upload failed: ${file.name}`; continue }
         const data = await res.json()
-        pendingFiles = [...pendingFiles, { name: data.name, attachmentId: data.attachment_id, path: data.path, size: data.size }]
+        pendingFiles = [...pendingFiles, { name: data.name, attachmentId: data.attachment_id, path: data.path, size: data.size, mimeType: file.type }]
       } catch (e) {
         error = `Upload error: ${file.name}`
       }
@@ -392,24 +392,23 @@
     if ((!text && !pendingFiles.length) || !connected || permRequest) return
     input = ''
 
-    let content = text
-    let sentAttachments = []
-    if (pendingFiles.length) {
-      sentAttachments = [...pendingFiles]
-      const hasId = pendingFiles.some(f => f.attachmentId)
-      const prefix = hasId ? ATTACH_PREFIX_ID : ATTACH_PREFIX_PATH
-      const refs = pendingFiles.map(f => {
-        const refType = f.attachmentId ? 'attachment' : 'path'
-        const ref     = f.attachmentId || f.path
-        return `- ${f.name} (${refType}: ${ref}, size: ${fmtSize(f.size)})`
-      }).join('\n')
-      content = text ? `${prefix}${refs}\n\n${text}` : `${prefix}${refs}`
-      pendingFiles = []
-    }
+    const sentAttachments = [...pendingFiles]
+    pendingFiles = []
+
+    const attachments = sentAttachments.map(f => ({
+      name:          f.name,
+      mime_type:     f.mimeType || 'application/octet-stream',
+      attachment_id: f.attachmentId || undefined,
+      path:          f.path || undefined,
+      size:          f.size,
+    }))
+
+    const payload = { content: text }
+    if (attachments.length) payload.attachments = attachments
 
     messages = [...messages, { kind: 'user', content: text || '', attachments: sentAttachments.map(f => ({ name: f.name, attachmentId: f.attachmentId, path: f.path, size: fmtSize(f.size) })) }]
     scrollToBottom()
-    ws.send(JSON.stringify({ type: 'send_message', send_message: { content } }))
+    ws.send(JSON.stringify({ type: 'send_message', send_message: payload }))
     onSessionEnd?.()
   }
 

@@ -2,6 +2,7 @@ package webd
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -173,4 +174,49 @@ func randomPrefix() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// resolveS3Attachment validates the HMAC-signed attachmentID and downloads the
+// object from S3, returning its raw bytes. Returns an error if the MAC is invalid.
+func (s *Server) resolveS3Attachment(ctx context.Context, attachmentID string) ([]byte, error) {
+	if s.s3 == nil {
+		return nil, fmt.Errorf("S3 not configured")
+	}
+	parts := strings.SplitN(attachmentID, ".", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("malformed attachment id")
+	}
+	keyBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("malformed attachment id: %w", err)
+	}
+	s3Key := string(keyBytes)
+
+	mac := hmac.New(sha256.New, s.cfg.AttachmentSecret)
+	mac.Write([]byte(s.s3.cfg.Bucket + ":" + s3Key))
+	if expected := hex.EncodeToString(mac.Sum(nil)[:8]); expected != parts[0] {
+		return nil, fmt.Errorf("invalid attachment id")
+	}
+
+	out, err := s.s3.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.s3.cfg.Bucket),
+		Key:    aws.String(s3Key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("S3 get: %w", err)
+	}
+	defer out.Body.Close()
+	return io.ReadAll(out.Body)
+}
+
+// resolveLocalAttachment reads an uploaded file from the local upload directory.
+// The path is validated to be within the configured upload dir.
+func resolveLocalAttachment(path string) ([]byte, error) {
+	uploadDir := envOr("WEBD_UPLOAD_DIR", "/tmp/mcp-workspace/"+uploadSubDir)
+	absPath := filepath.Clean(path)
+	dirWithSep := uploadDir + string(filepath.Separator)
+	if absPath != uploadDir && !strings.HasPrefix(absPath, dirWithSep) {
+		return nil, fmt.Errorf("path outside upload directory")
+	}
+	return os.ReadFile(absPath)
 }
