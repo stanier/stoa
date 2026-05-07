@@ -878,7 +878,7 @@ docker events --filter type=container --filter event=start
 
 ## References
 
-- [Docker SDK for Go](https://pkg.go.dev/github.com/docker/docker/client)
+- [Docker SDK for Go](https://pkg.go.dev/github.com/moby/moby/client)
 - [Docker Socket Proxy](https://github.com/Tecnativa/docker-socket-proxy)
 - [MCP Specification](https://spec.modelcontextprotocol.io/)
 - [Kubernetes Best Practices](https://kubernetes.io/docs/concepts/configuration/overview/)
