@@ -116,15 +116,15 @@ func (s *Server) uploadToS3(r *http.Request, key string, file io.Reader, size in
 		return "", 0, fmt.Errorf("s3 put: %w", err)
 	}
 
-	return makeAttachmentID(s.cfg.AttachmentSecret, s.s3.cfg.Bucket, key), written, nil
+	return makeAttachmentID(s.cfg.AttachmentSecret, key), written, nil
 }
 
 // makeAttachmentID returns a compact signed token: hex(hmac[:8]) + "." + base64url(s3_key).
 // The mcp-attachments server verifies the MAC before resolving the key — preventing
 // the agent from requesting arbitrary S3 objects.
-func makeAttachmentID(secret []byte, bucket, s3Key string) string {
+func makeAttachmentID(secret []byte, s3Key string) string {
 	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(bucket + ":" + s3Key))
+	mac.Write([]byte(s3Key))
 	macHex := hex.EncodeToString(mac.Sum(nil)[:8])
 	keyEnc := base64.RawURLEncoding.EncodeToString([]byte(s3Key))
 	return macHex + "." + keyEnc
@@ -193,7 +193,7 @@ func (s *Server) resolveS3Attachment(ctx context.Context, attachmentID string) (
 	s3Key := string(keyBytes)
 
 	mac := hmac.New(sha256.New, s.cfg.AttachmentSecret)
-	mac.Write([]byte(s.s3.cfg.Bucket + ":" + s3Key))
+	mac.Write([]byte(s3Key))
 	if expected := hex.EncodeToString(mac.Sum(nil)[:8]); expected != parts[0] {
 		return nil, fmt.Errorf("invalid attachment id")
 	}

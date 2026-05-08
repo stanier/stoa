@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/gorilla/websocket"
@@ -247,14 +248,22 @@ func (s *Server) fetchAttachmentBytes(ctx context.Context, ref agentproto.Attach
 }
 
 // attachmentTextNote formats a retrieval hint for non-embedded attachments.
+// For S3 attachments it names the read_attachment tool explicitly.
+// For local-filesystem attachments it converts the absolute webd path to the
+// path the MCP filesystem tool sees (same volume, different mount point).
 func attachmentTextNote(ref agentproto.AttachmentRef) string {
-	ref_str := ref.AttachmentID
-	ref_type := "attachment"
-	if ref_str == "" {
-		ref_str = ref.Path
-		ref_type = "path"
+	if ref.AttachmentID != "" {
+		return fmt.Sprintf("- %s (call read_attachment with attachment_id=%s, size: %d bytes)",
+			ref.Name, ref.AttachmentID, ref.Size)
 	}
-	return fmt.Sprintf("- %s (%s: %s, size: %d bytes)", ref.Name, ref_type, ref_str, ref.Size)
+	// Local filesystem mode: webd writes to WEBD_UPLOAD_DIR which sits inside
+	// the mcp-workspace volume. The MCP filesystem container mounts the same
+	// volume at /mcp/root, so strip the workspace root to get the relative path.
+	uploadDir := envOr("WEBD_UPLOAD_DIR", "/tmp/mcp-workspace/"+uploadSubDir)
+	workspaceDir := filepath.Dir(uploadDir)
+	relPath := strings.TrimPrefix(ref.Path, workspaceDir+string(filepath.Separator))
+	return fmt.Sprintf("- %s (call mcp_filesystem_read_file with path=%s, size: %d bytes)",
+		ref.Name, relPath, ref.Size)
 }
 
 // proxyToAgentd forwards an HTTP request to agentd, injecting the Bearer token.

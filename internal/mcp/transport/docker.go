@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"sync"
 
@@ -117,10 +118,11 @@ func (t *DockerTransport) Connect(ctx context.Context) error {
 	}
 
 	// Demux the multiplexed stdout/stderr stream into a plain byte pipe.
+	// Stderr from the container is forwarded to the host logger so crashes are visible.
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
-		demuxDockerStream(pw, attachResp.Reader)
+		demuxDockerStream(pw, attachResp.Reader, t.cfg.ContainerName)
 	}()
 
 	t.stdin = attachResp.Conn
@@ -275,9 +277,10 @@ func (t *DockerTransport) createContainer(ctx context.Context) (string, error) {
 }
 
 // demuxDockerStream reads Docker's multiplexed stream format (8-byte header per frame:
-// stream_type(1), padding(3), frame_size(4 big-endian)) and writes stdout frames to dst,
-// discarding stdin and stderr frames. Returns nil on clean EOF.
-func demuxDockerStream(dst io.Writer, src io.Reader) error {
+// stream_type(1), padding(3), frame_size(4 big-endian)) and writes stdout frames to dst.
+// Stderr frames are logged via the standard logger so container crash output is visible.
+// Returns nil on clean EOF.
+func demuxDockerStream(dst io.Writer, src io.Reader, containerName string) error {
 	hdr := make([]byte, 8)
 	for {
 		if _, err := io.ReadFull(src, hdr); err != nil {
@@ -287,11 +290,18 @@ func demuxDockerStream(dst io.Writer, src io.Reader) error {
 			return err
 		}
 		size := int64(binary.BigEndian.Uint32(hdr[4:8]))
-		if hdr[0] == 1 { // stdout
+		switch hdr[0] {
+		case 1: // stdout
 			if _, err := io.CopyN(dst, src, size); err != nil {
 				return err
 			}
-		} else { // stdin(0) or stderr(2)
+		case 2: // stderr — log so container crash messages are visible
+			buf := make([]byte, size)
+			if _, err := io.ReadFull(src, buf); err != nil {
+				return err
+			}
+			log.Printf("[%s stderr] %s", containerName, strings.TrimRight(string(buf), "\n"))
+		default: // stdin echo (0) — discard
 			if _, err := io.CopyN(io.Discard, src, size); err != nil {
 				return err
 			}

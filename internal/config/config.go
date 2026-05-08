@@ -708,6 +708,19 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
 	}
 
+	// Viper lowercases all map keys; MCP server env var names must be
+	// uppercase so the container process can find them via os.Getenv.
+	for i := range cfg.MCP.Servers {
+		if len(cfg.MCP.Servers[i].Env) == 0 {
+			continue
+		}
+		fixed := make(map[string]string, len(cfg.MCP.Servers[i].Env))
+		for k, v := range cfg.MCP.Servers[i].Env {
+			fixed[strings.ToUpper(k)] = v
+		}
+		cfg.MCP.Servers[i].Env = fixed
+	}
+
 	// resolveFileSecret reads a secret value from a file path stored in an env var.
 	// Used for Podman/Docker secrets (e.g. ANTHROPIC_API_KEY_FILE=/run/secrets/api_key).
 	resolveFileSecret := func(fileEnv, current string) string {
