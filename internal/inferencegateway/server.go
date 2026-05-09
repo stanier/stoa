@@ -1767,19 +1767,22 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	var models []modelObj
 
 	for name, up := range s.router.upstreams {
-		if up.cfg.StaticModelsOnly {
-			// Separate exact routes from glob routes.
-			var globs []string
-			for _, route := range s.router.routes {
-				if route.Upstream != name || route.Model == "*" {
-					continue
-				}
-				if isGlobPattern(route.Model) {
-					globs = append(globs, route.Model)
-				} else {
-					models = append(models, newModel(route.Model))
-				}
+		// Always include statically configured exact-match routes.
+		staticSeen := map[string]bool{}
+		var globs []string
+		for _, route := range s.router.routes {
+			if route.Upstream != name || route.Model == "*" {
+				continue
 			}
+			if isGlobPattern(route.Model) {
+				globs = append(globs, route.Model)
+			} else {
+				models = append(models, newModel(route.Model))
+				staticSeen[route.Model] = true
+			}
+		}
+
+		if up.cfg.StaticModelsOnly {
 			// Expand glob routes against the provider's model list.
 			if len(globs) > 0 {
 				list, err := up.client.ListModels(ctx)
@@ -1790,7 +1793,9 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 					for _, m := range list {
 						for _, pattern := range globs {
 							if matched, _ := filepath.Match(pattern, m); matched {
-								models = append(models, newModel(m))
+								if !staticSeen[m] {
+									models = append(models, newModel(m))
+								}
 								break
 							}
 						}
@@ -1806,7 +1811,9 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		}
 		s.router.IndexModels(name, list)
 		for _, m := range list {
-			models = append(models, newModel(m))
+			if !staticSeen[m] {
+				models = append(models, newModel(m))
+			}
 		}
 	}
 
