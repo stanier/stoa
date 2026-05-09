@@ -314,7 +314,7 @@ func (s *Server) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "failed to read request body")
 		return
@@ -785,7 +785,7 @@ func (s *Server) handleAnthropic(w http.ResponseWriter, r *http.Request) {
 	// As a proxy we accept any value (including absent) without error.
 	// r.Header.Get("anthropic-version") is intentionally ignored here.
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
 	if err != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "failed to read request body")
 		return
@@ -1417,7 +1417,7 @@ func (s *Server) handleGemini(w http.ResponseWriter, r *http.Request) {
 
 	streaming := action == "streamGenerateContent" || r.URL.Query().Get("alt") == "sse"
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
 	if err != nil {
 		writeGeminiError(w, http.StatusBadRequest, "failed to read request body")
 		return

@@ -80,8 +80,9 @@ func (s *Server) ListTools(_ context.Context) ([]mcpserver.Tool, error) {
 		{
 			Name: "read_attachment",
 			Description: "Read the content of an uploaded file attachment. " +
-				"Use this tool when a message contains an attachment reference like (attachment: ID). " +
-				"Pass the attachment ID exactly as it appears — do not modify it.",
+				"Use this tool when a message contains a line like " +
+				"\"- filename (call read_attachment with attachment_id=..., size: ... bytes)\". " +
+				"Pass the attachment_id value exactly as it appears — do not modify it.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{

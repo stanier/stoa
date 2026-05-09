@@ -52,6 +52,8 @@ type rawBlock struct {
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"` // string or []block
 	IsError   *bool           `json:"is_error,omitempty"`
+	// image block fields
+	Source json.RawMessage `json:"source,omitempty"`
 }
 
 type rawCacheCtrl struct {
@@ -195,6 +197,40 @@ func parseContentBlocks(content json.RawMessage) []anthropic.ContentBlockParamUn
 					}
 				}
 				result = append(result, anthropic.ContentBlockParamUnion{OfToolResult: param})
+			case "image":
+				if len(block.Source) == 0 {
+					continue
+				}
+				var src struct {
+					Type      string `json:"type"`
+					MediaType string `json:"media_type,omitempty"`
+					Data      string `json:"data,omitempty"`
+					URL       string `json:"url,omitempty"`
+				}
+				if err2 := json.Unmarshal(block.Source, &src); err2 != nil {
+					continue
+				}
+				imgParam := &anthropic.ImageBlockParam{Type: "image"}
+				switch src.Type {
+				case "base64":
+					imgParam.Source = anthropic.ImageBlockParamSourceUnion{
+						OfBase64: &anthropic.Base64ImageSourceParam{
+							Type:      "base64",
+							MediaType: anthropic.Base64ImageSourceMediaType(src.MediaType),
+							Data:      src.Data,
+						},
+					}
+				case "url":
+					imgParam.Source = anthropic.ImageBlockParamSourceUnion{
+						OfURL: &anthropic.URLImageSourceParam{
+							Type: "url",
+							URL:  src.URL,
+						},
+					}
+				default:
+					continue
+				}
+				result = append(result, anthropic.ContentBlockParamUnion{OfImage: imgParam})
 			default:
 				// Unknown block types are skipped to avoid malformed params.
 				continue
