@@ -687,18 +687,20 @@ func Load() (*Config, error) {
 	v.BindEnv("slack.session_ttl", "SLACK_SESSION_TTL")
 	v.BindEnv("slack.session_file", "SLACK_SESSION_FILE")
 
-	// Config file
+	// Config file — search /etc/stoa first (container/system install), then
+	// ~/.config/stoa (user install). First file found wins.
+	v.SetConfigName("config")
+	v.SetConfigType("yaml")
+	v.AddConfigPath("/etc/stoa")
+
 	configDir, err := GetConfigDir()
 	if err == nil {
 		v.AddConfigPath(configDir)
-		v.SetConfigName("config")
-		v.SetConfigType("yaml")
+	}
 
-		// Try to read config file (not an error if it doesn't exist)
-		if err := v.ReadInConfig(); err != nil {
-			if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-				return nil, fmt.Errorf("error reading config file: %w", err)
-			}
+	if err := v.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			return nil, fmt.Errorf("error reading config file: %w", err)
 		}
 	}
 

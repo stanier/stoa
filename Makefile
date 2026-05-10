@@ -13,8 +13,8 @@ DOCKER_REGISTRY ?= ghcr.io/stanier
 IMAGE_TAG       ?= latest
 
 # All binaries — name matches ./cmd/<name> and bin/debug/<name>
-BINARIES    := chat mcp-filesystem mcp-memory dump-context mcp-time mcp-fetch mcp-attachments mcp-diff mcp-web-search mcp-http mcp-graphql mcp-netbox mcp-promql mcp-zulip mcp-shell mcp-trello mcp-acp agentd auth-admin authd local-idp webd zulip-bridge slack-bridge discord-bridge matrix-bridge cli-bridge inference-gateway apikeyd pii-filter
-MCP_SERVERS := mcp-filesystem mcp-memory mcp-time mcp-fetch mcp-attachments mcp-diff mcp-web-search mcp-http mcp-graphql mcp-netbox mcp-promql mcp-zulip mcp-shell mcp-trello mcp-acp
+BINARIES    := chat mcp-filesystem mcp-memory dump-context mcp-time mcp-fetch mcp-attachments mcp-diff mcp-web-search mcp-http mcp-graphql mcp-netbox mcp-promql mcp-zulip mcp-shell mcp-trello mcp-knowledgebase mcp-acp agentd auth-admin authd local-idp webd zulip-bridge slack-bridge discord-bridge matrix-bridge cli-bridge inference-gateway apikeyd pii-filter
+MCP_SERVERS := mcp-filesystem mcp-memory mcp-time mcp-fetch mcp-attachments mcp-diff mcp-web-search mcp-http mcp-graphql mcp-netbox mcp-promql mcp-zulip mcp-shell mcp-trello mcp-knowledgebase mcp-acp
 
 .DEFAULT_GOAL := help
 
