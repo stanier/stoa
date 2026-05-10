@@ -13,6 +13,7 @@ import (
 
 	"github.com/stanier/stoa/internal/chat"
 	"github.com/stanier/stoa/internal/llm"
+	"github.com/stanier/stoa/internal/logging"
 )
 
 // UpstreamConfig configures one upstream LLM provider.
@@ -35,6 +36,7 @@ func (c UpstreamConfig) buildHTTPClient() *http.Client {
 	if !c.TLSSkipVerify {
 		return nil // callers treat nil as "use SDK default"
 	}
+	logging.Warnf("inferencegateway: WARNING: TLS certificate verification disabled for upstream %q — do not use in production", c.Name)
 	return &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
@@ -109,21 +111,7 @@ func NewUpstream(cfg UpstreamConfig) (*Upstream, error) {
 		maxTokens = 4096
 	}
 
-	var client llm.Client
-	var err error
-	apiKey := cfg.resolveAPIKey()
-
-	httpClient := cfg.buildHTTPClient()
-	switch cfg.Dialect {
-	case "openai":
-		client, err = llm.NewOpenAIClientSimple(apiKey, cfg.APIURL, cfg.DefaultModel, maxTokens, httpClient)
-	case "anthropic":
-		client, err = llm.NewAnthropicClientSimple(apiKey, cfg.APIURL, cfg.DefaultModel, maxTokens, httpClient)
-	case "gemini":
-		client, err = llm.NewGeminiClient(apiKey, cfg.APIURL, cfg.DefaultModel, maxTokens, httpClient)
-	default:
-		return nil, fmt.Errorf("unknown dialect %q (want \"openai\", \"anthropic\", or \"gemini\")", cfg.Dialect)
-	}
+	client, err := llm.NewClientFromParams(cfg.Dialect, cfg.resolveAPIKey(), cfg.APIURL, cfg.DefaultModel, maxTokens, cfg.buildHTTPClient())
 	if err != nil {
 		return nil, fmt.Errorf("upstream %q: %w", cfg.Name, err)
 	}

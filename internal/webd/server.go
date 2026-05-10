@@ -55,8 +55,28 @@ func NewServer(cfg *Config) (*Server, error) {
 	return s, nil
 }
 
-// Router returns the HTTP handler.
-func (s *Server) Router() http.Handler { return s.mux }
+// Router returns the HTTP handler wrapped with security headers.
+func (s *Server) Router() http.Handler { return securityHeaders(s.mux) }
+
+// securityHeaders adds defensive HTTP headers to every response.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		// Svelte injects inline styles; everything else is same-origin only.
+		h.Set("Content-Security-Policy",
+			"default-src 'self'; "+
+				"script-src 'self'; "+
+				"style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data: blob:; "+
+				"connect-src 'self' ws: wss:; "+
+				"font-src 'self'; "+
+				"object-src 'none'; "+
+				"frame-ancestors 'none'")
+		next.ServeHTTP(w, r)
+	})
+}
 
 func (s *Server) registerRoutes() {
 	// Auth endpoints — no session required.

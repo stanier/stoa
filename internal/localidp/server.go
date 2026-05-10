@@ -1,10 +1,13 @@
-// Package localidp implements a minimal but production-ready OIDC identity
-// provider backed by local username/password accounts.
+// Package localidp implements a minimal OIDC identity provider backed by
+// local username/password accounts.
 //
 // It exposes the standard OIDC discovery + token endpoints so that authd
 // treats it identically to any upstream provider (Google, GitLab, etc.).
-// For dev, run it on localhost:9999. For production, run it as a container
-// behind a reverse proxy with a real domain.
+//
+// WARNING: local-idp is intended for development and self-hosted single-tenant
+// deployments only. It has not been audited for multi-tenant or public-facing
+// production use. For production, prefer a dedicated identity provider
+// (Keycloak, Authentik, Okta, Google, etc.) configured as an authd upstream.
 package localidp
 
 import (

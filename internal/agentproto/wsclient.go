@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 
@@ -49,6 +50,7 @@ func NewWSClientWithToken(baseURL, token string) *WSClient {
 func NewWSClientWithOptions(baseURL, token string, tlsSkipVerify bool) *WSClient {
 	var httpClient *http.Client
 	if tlsSkipVerify {
+		log.Printf("agentproto: WARNING: TLS certificate verification disabled for %s — do not use in production", baseURL)
 		httpClient = &http.Client{
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec

@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
+	"time"
 
+	"github.com/stanier/stoa/internal/daemon"
 	"github.com/stanier/stoa/internal/localidp"
 	"github.com/stanier/stoa/internal/logging"
 )
@@ -29,6 +29,11 @@ func main() {
 
 	if *helpFlag {
 		fmt.Println("local-idp — local OIDC identity provider for stoa")
+		fmt.Println()
+		fmt.Println("WARNING: local-idp is for development and self-hosted single-tenant use only.")
+		fmt.Println("It has not been audited for multi-tenant or public-facing production deployments.")
+		fmt.Println("For production, use a dedicated IdP (Keycloak, Authentik, Okta, Google, etc.)")
+		fmt.Println("configured as an authd upstream.")
 		fmt.Println("\nUsage: local-idp [options]")
 		fmt.Println("\nOptions:")
 		flag.PrintDefaults()
@@ -48,7 +53,7 @@ func main() {
 	}
 
 	if err := logging.Init(logging.Config{
-		Level:   logging.LogLevel(resolveStr(*logLevel, "info")),
+		Level:   logging.LogLevel(daemon.ResolveStr(*logLevel, "info")),
 		LogFile: *logFile,
 		Pretty:  true,
 	}); err != nil {
@@ -72,18 +77,18 @@ func main() {
 		os.Exit(0)
 	}
 
-	resolvedIssuer := resolveStr(*issuer, os.Getenv("LOCAL_IDP_ISSUER"))
+	resolvedIssuer := daemon.ResolveStr(*issuer, os.Getenv("LOCAL_IDP_ISSUER"))
 	if resolvedIssuer == "" {
 		fmt.Fprintln(os.Stderr, "local-idp: LOCAL_IDP_ISSUER is required")
 		os.Exit(1)
 	}
 
-	resolvedClientID := resolveStr(*clientID, os.Getenv("LOCAL_IDP_CLIENT_ID"))
+	resolvedClientID := daemon.ResolveStr(*clientID, os.Getenv("LOCAL_IDP_CLIENT_ID"))
 	if resolvedClientID == "" {
 		resolvedClientID = "stoa"
 	}
 
-	rawRedirectURIs := resolveStr(*redirectURIs, os.Getenv("LOCAL_IDP_REDIRECT_URIS"))
+	rawRedirectURIs := daemon.ResolveStr(*redirectURIs, os.Getenv("LOCAL_IDP_REDIRECT_URIS"))
 	if rawRedirectURIs == "" {
 		fmt.Fprintln(os.Stderr, "local-idp: LOCAL_IDP_REDIRECT_URIS is required (comma-separated list of allowed redirect URIs)")
 		os.Exit(1)
@@ -93,7 +98,7 @@ func main() {
 		allowedURIs[i] = strings.TrimSpace(u)
 	}
 
-	externalURL := resolveStr(os.Getenv("LOCAL_IDP_EXTERNAL_URL"), resolvedIssuer)
+	externalURL := daemon.ResolveStr(os.Getenv("LOCAL_IDP_EXTERNAL_URL"), resolvedIssuer)
 
 	srv, err := localidp.NewServer(context.Background(), resolvedIssuer, externalURL, resolvedClientID, dsn, allowedURIs)
 	if err != nil {
@@ -106,26 +111,6 @@ func main() {
 		Addr:    addr,
 		Handler: srv.Router(),
 	}
-
-	go func() {
-		logging.Infof("local-idp: listening on %s (issuer: %s)", addr, resolvedIssuer)
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logging.Errorf("local-idp: server error: %v", err)
-			os.Exit(1)
-		}
-	}()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	<-sigCh
-
-	logging.Info("local-idp: shutting down")
-	_ = httpSrv.Close()
-}
-
-func resolveStr(flagVal, envVal string) string {
-	if flagVal != "" {
-		return flagVal
-	}
-	return envVal
+	logging.Infof("local-idp: listening on %s (issuer: %s)", addr, resolvedIssuer)
+	daemon.ServeHTTP("local-idp", httpSrv, 10*time.Second, "", "")
 }

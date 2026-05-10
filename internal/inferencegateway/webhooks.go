@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -83,7 +84,8 @@ type WebhookTransformResponse struct {
 
 // WebhookHooks builds a Hooks bundle wired to the provided WebhookConfig.
 // Fields for unconfigured URLs are left nil (no-op).
-func WebhookHooks(cfg WebhookConfig) Hooks {
+// Returns an error if any configured URL has an invalid or disallowed scheme.
+func WebhookHooks(cfg WebhookConfig) (Hooks, error) {
 	timeout := cfg.Timeout
 	if timeout == 0 {
 		timeout = 10 * time.Second
@@ -93,10 +95,16 @@ func WebhookHooks(cfg WebhookConfig) Hooks {
 	var h Hooks
 
 	if cfg.StreamingTransformURL != "" {
+		if err := validateWebhookURL(cfg.StreamingTransformURL); err != nil {
+			return Hooks{}, fmt.Errorf("invalid streaming_transform_url: %w", err)
+		}
 		h.StreamingTransform = WebhookStreamingFactory(cfg)
 	}
 
 	if cfg.PreRequestURL != "" {
+		if err := validateWebhookURL(cfg.PreRequestURL); err != nil {
+			return Hooks{}, fmt.Errorf("invalid pre_request_url: %w", err)
+		}
 		url := cfg.PreRequestURL
 		h.PreRequest = append(h.PreRequest, func(ctx context.Context, req *HookRequest) (context.Context, error) {
 			payload := WebhookPreRequest{
@@ -124,6 +132,9 @@ func WebhookHooks(cfg WebhookConfig) Hooks {
 	}
 
 	if cfg.ResponseTransformURL != "" {
+		if err := validateWebhookURL(cfg.ResponseTransformURL); err != nil {
+			return Hooks{}, fmt.Errorf("invalid response_transform_url: %w", err)
+		}
 		url := cfg.ResponseTransformURL
 		h.ResponseTransform = append(h.ResponseTransform, func(ctx context.Context, resp *HookResponse) error {
 			payload := WebhookTransformRequest{
@@ -142,7 +153,20 @@ func WebhookHooks(cfg WebhookConfig) Hooks {
 		})
 	}
 
-	return h
+	return h, nil
+}
+
+// validateWebhookURL returns an error if rawURL has a scheme other than http or https.
+// This prevents accidental SSRF via file://, gopher://, etc. in operator config.
+func validateWebhookURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid webhook URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("webhook URL scheme %q not allowed (must be http or https)", u.Scheme)
+	}
+	return nil
 }
 
 // postJSON marshals body, POSTs it to url, and decodes the JSON response into out.

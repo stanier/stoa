@@ -53,7 +53,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		}
 		userID, err := s.verifySessionToken(r.Context(), token)
 		if err != nil || userID == "" {
-			log.Printf("apikeyd: requireAuth: verify failed on %s %s: err=%v userID=%q token_len=%d", r.Method, r.URL.Path, err, userID, len(token))
+			log.Printf("apikeyd: requireAuth: verify failed on %s %s: err=%v userID=%q", r.Method, r.URL.Path, err, userID)
 			http.Error(w, `{"error":"unauthenticated"}`, http.StatusUnauthorized)
 			return
 		}

@@ -25,6 +25,18 @@ const (
 	uploadSubDir  = "web-uploads"
 )
 
+// allowedMIMETypes is the set of content types accepted by the upload handler.
+// SVG and HTML are intentionally excluded — they can carry inline scripts.
+var allowedMIMETypes = map[string]bool{
+	"image/jpeg":       true,
+	"image/png":        true,
+	"image/gif":        true,
+	"image/webp":       true,
+	"application/pdf":  true,
+	"text/plain":       true,
+	"application/json": true,
+}
+
 // UploadResult is returned to the browser after a successful upload.
 // AttachmentID is an opaque HMAC-signed token (S3 mode) that the agent passes
 // to the read_attachment MCP tool — the agent never sees a URL or S3 key.
@@ -60,6 +72,22 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	if header.Size > maxUploadSize {
 		http.Error(w, fmt.Sprintf("file exceeds %d MB limit", maxUploadSize/1024/1024), http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	// Detect content type from the first 512 bytes and validate against the allowlist.
+	// Use the file bytes rather than the declared Content-Type header — browsers lie.
+	sniff := make([]byte, 512)
+	n, _ := file.Read(sniff)
+	detectedType := http.DetectContentType(sniff[:n])
+	// DetectContentType may return "text/plain; charset=utf-8" — strip parameters.
+	mimeBase := strings.SplitN(detectedType, ";", 2)[0]
+	if !allowedMIMETypes[mimeBase] {
+		http.Error(w, fmt.Sprintf("file type %q not allowed", mimeBase), http.StatusUnsupportedMediaType)
+		return
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
