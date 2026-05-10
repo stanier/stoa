@@ -485,13 +485,34 @@ func (c *AnthropicClient) StreamMessage(ctx context.Context, messages []chat.Mes
 
 // ListModels returns models available from the Anthropic API.
 func (c *AnthropicClient) ListModels(ctx context.Context) ([]string, error) {
+	infos, err := c.ListModelInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(infos))
+	for i, m := range infos {
+		ids[i] = m.ID
+	}
+	return ids, nil
+}
+
+// ListModelInfo returns Anthropic models with capability flags sourced from the SDK.
+func (c *AnthropicClient) ListModelInfo(ctx context.Context) ([]ModelInfo, error) {
 	page, err := c.client.Models.List(ctx, anthropic.ModelListParams{})
 	if err != nil {
 		return nil, fmt.Errorf("list models: %w", err)
 	}
-	ids := make([]string, 0, len(page.Data))
+	infos := make([]ModelInfo, 0, len(page.Data))
 	for _, m := range page.Data {
-		ids = append(ids, m.ID)
+		caps := m.Capabilities
+		infos = append(infos, ModelInfo{
+			ID:                m.ID,
+			Vision:            caps.ImageInput.Supported,
+			ToolUse:           true, // all current Anthropic models support tool use
+			Thinking:          caps.Thinking.Supported,
+			PDFInput:          caps.PDFInput.Supported,
+			StructuredOutputs: caps.StructuredOutputs.Supported,
+		})
 	}
-	return ids, nil
+	return infos, nil
 }

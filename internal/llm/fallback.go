@@ -212,6 +212,28 @@ func (f *FallbackClient) ListModels(ctx context.Context) ([]string, error) {
 	return nil, fmt.Errorf("llm: fallback: all providers failed: %w", lastErr)
 }
 
+// ListModelInfo returns model info from the first provider that responds successfully.
+func (f *FallbackClient) ListModelInfo(ctx context.Context) ([]ModelInfo, error) {
+	if len(f.chain) == 0 {
+		return nil, fmt.Errorf("llm: fallback: empty provider chain")
+	}
+
+	var lastErr error
+	for _, name := range f.chain {
+		client, ok := f.reg.GetClient(name)
+		if !ok {
+			lastErr = fmt.Errorf("provider %q not found", name)
+			continue
+		}
+		infos, err := client.ListModelInfo(ctx)
+		if err == nil {
+			return infos, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("llm: fallback: all providers failed: %w", lastErr)
+}
+
 // instrumentedStream passes through all chunks from an already-opened stream
 // unchanged and records timing + error status to the stats registry (if non-nil)
 // when the stream completes. Mid-stream errors are delivered as-is; no retry is

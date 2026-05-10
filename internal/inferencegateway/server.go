@@ -331,7 +331,14 @@ func (s *Server) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "messages: "+err.Error())
 		return
 	}
+	route, _ := s.router.RouteFor(req.Model)
+	if route.StripImages {
+		messages = stripImages(messages)
+	}
 	tools := ParseOpenAITools(req.Tools)
+	if route.StripTools {
+		tools = stripTools(tools)
+	}
 
 	ctx, err := s.runPreRequest(r.Context(), &HookRequest{
 		RequestID: requestIDFromContext(r.Context()),
@@ -810,7 +817,14 @@ func (s *Server) handleAnthropic(w http.ResponseWriter, r *http.Request) {
 		writeAnthropicError(w, http.StatusBadRequest, "messages: "+err.Error())
 		return
 	}
+	route, _ := s.router.RouteFor(req.Model)
+	if route.StripImages {
+		messages = stripImages(messages)
+	}
 	tools := ParseAnthropicTools(req.Tools)
+	if route.StripTools {
+		tools = stripTools(tools)
+	}
 
 	ctx, err := s.runPreRequest(r.Context(), &HookRequest{
 		RequestID: requestIDFromContext(r.Context()),
@@ -897,10 +911,12 @@ func (s *Server) handleAnthropic(w http.ResponseWriter, r *http.Request) {
 			}
 			abortWithSidecarError := func(msg string) {
 				writeEvents([][]byte{
-					anthropicSSE("error", AnthropicStreamEvent{
-						Type: "error",
-						// reuse Delta to carry the error object
-						Delta: &AnthropicStreamDelta{Type: "api_error", StopReason: msg},
+					anthropicSSE("error", map[string]interface{}{
+						"type": "error",
+						"error": map[string]interface{}{
+							"type":    "api_error",
+							"message": msg,
+						},
 					}),
 				})
 			}
@@ -930,6 +946,8 @@ func (s *Server) handleAnthropic(w http.ResponseWriter, r *http.Request) {
 				if chunk.Error != nil {
 					logging.Warnf("proxy anthropic stream error (sidecar path): %v", chunk.Error)
 					anthropicStreamErr = chunk.Error
+					closeBlock()
+					abortWithSidecarError(chunk.Error.Error())
 					break
 				}
 				transformed, err := st.Transform(r.Context(), &chunk)
@@ -1225,6 +1243,16 @@ func (s *Server) handleAnthropic(w http.ResponseWriter, r *http.Request) {
 			if chunk.Error != nil {
 				logging.Warnf("proxy anthropic stream error: %v", chunk.Error)
 				anthropicStreamErr = chunk.Error
+				closeBlock()
+				writeEvents([][]byte{
+					anthropicSSE("error", map[string]interface{}{
+						"type": "error",
+						"error": map[string]interface{}{
+							"type":    "api_error",
+							"message": chunk.Error.Error(),
+						},
+					}),
+				})
 				break
 			}
 
@@ -1434,7 +1462,14 @@ func (s *Server) handleGemini(w http.ResponseWriter, r *http.Request) {
 		writeGeminiError(w, http.StatusBadRequest, "messages: "+err.Error())
 		return
 	}
+	route, _ := s.router.RouteFor(model)
+	if route.StripImages {
+		messages = stripImages(messages)
+	}
 	tools := ParseGeminiTools(req.Tools)
+	if route.StripTools {
+		tools = stripTools(tools)
+	}
 
 	ctx, err := s.runPreRequest(r.Context(), &HookRequest{
 		RequestID: requestIDFromContext(r.Context()),
@@ -1755,14 +1790,48 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 
 	// modelObj is intentionally compatible with both the OpenAI SDK
 	// ("object": "model") and the Anthropic SDK ("type": "model").
+	// Capabilities is omitted when no route or upstream source declares any
+	// (unknown ≠ none — the client should treat absent capabilities as
+	// "not declared" rather than "no capabilities").
 	type modelObj struct {
-		ID      string `json:"id"`
-		Object  string `json:"object"`
-		Type    string `json:"type"`
-		Created int64  `json:"created"`
+		ID           string   `json:"id"`
+		Object       string   `json:"object"`
+		Type         string   `json:"type"`
+		Created      int64    `json:"created"`
+		Capabilities []string `json:"capabilities,omitempty"`
 	}
-	newModel := func(id string) modelObj {
-		return modelObj{ID: id, Object: "model", Type: "model", Created: 0}
+
+	// capsFromInfo converts an llm.ModelInfo to the normalized capability string slice.
+	capsFromInfo := func(info llm.ModelInfo) []string {
+		var caps []string
+		if info.Vision {
+			caps = append(caps, "vision")
+		}
+		if info.ToolUse {
+			caps = append(caps, "tool_use")
+		}
+		if info.Thinking {
+			caps = append(caps, "thinking")
+		}
+		if info.PDFInput {
+			caps = append(caps, "pdf_input")
+		}
+		if info.StructuredOutputs {
+			caps = append(caps, "structured_outputs")
+		}
+		return caps
+	}
+
+	// newModel builds a modelObj. Route-level config always wins; upstream-sourced
+	// capabilities fill in when no explicit route matches.
+	newModel := func(id string, upstreamCaps []string) modelObj {
+		obj := modelObj{ID: id, Object: "model", Type: "model", Created: 0}
+		if route, ok := s.router.RouteFor(id); ok {
+			obj.Capabilities = route.EffectiveCapabilities()
+		} else if len(upstreamCaps) > 0 {
+			obj.Capabilities = upstreamCaps
+		}
+		return obj
 	}
 	var models []modelObj
 
@@ -1777,7 +1846,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			if isGlobPattern(route.Model) {
 				globs = append(globs, route.Model)
 			} else {
-				models = append(models, newModel(route.Model))
+				models = append(models, newModel(route.Model, nil))
 				staticSeen[route.Model] = true
 			}
 		}
@@ -1785,16 +1854,20 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		if up.cfg.StaticModelsOnly {
 			// Expand glob routes against the provider's model list.
 			if len(globs) > 0 {
-				list, err := up.client.ListModels(ctx)
+				infos, err := up.client.ListModelInfo(ctx)
 				if err != nil {
 					logging.Warnf("proxy: list models from %q: %v", name, err)
 				} else {
-					s.router.IndexModels(name, list)
-					for _, m := range list {
+					ids := make([]string, len(infos))
+					for i, mi := range infos {
+						ids[i] = mi.ID
+					}
+					s.router.IndexModels(name, ids)
+					for _, mi := range infos {
 						for _, pattern := range globs {
-							if matched, _ := filepath.Match(pattern, m); matched {
-								if !staticSeen[m] {
-									models = append(models, newModel(m))
+							if matched, _ := filepath.Match(pattern, mi.ID); matched {
+								if !staticSeen[mi.ID] {
+									models = append(models, newModel(mi.ID, capsFromInfo(mi)))
 								}
 								break
 							}
@@ -1804,15 +1877,19 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		list, err := up.client.ListModels(ctx)
+		infos, err := up.client.ListModelInfo(ctx)
 		if err != nil {
 			logging.Warnf("proxy: list models from %q: %v", name, err)
 			continue
 		}
-		s.router.IndexModels(name, list)
-		for _, m := range list {
-			if !staticSeen[m] {
-				models = append(models, newModel(m))
+		ids := make([]string, len(infos))
+		for i, mi := range infos {
+			ids[i] = mi.ID
+		}
+		s.router.IndexModels(name, ids)
+		for _, mi := range infos {
+			if !staticSeen[mi.ID] {
+				models = append(models, newModel(mi.ID, capsFromInfo(mi)))
 			}
 		}
 	}

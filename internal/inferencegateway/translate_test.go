@@ -110,6 +110,68 @@ func TestParseOpenAIMessages_PlainText(t *testing.T) {
 	}
 }
 
+func TestParseAnthropicMessages_Base64Image(t *testing.T) {
+	// Anthropic-format user message with a base64 image block + text.
+	msgs := []AnthropicMessage{
+		{
+			Role: "user",
+			Content: json.RawMessage(`[
+				{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}},
+				{"type":"text","text":"What do you see?"}
+			]`),
+		},
+	}
+
+	result, err := ParseAnthropicMessages(msgs, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(result))
+	}
+	msg := result[0]
+	if msg.Role != chat.RoleUser {
+		t.Errorf("expected role user, got %q", msg.Role)
+	}
+	if msg.Content != "What do you see?" {
+		t.Errorf("unexpected content %q", msg.Content)
+	}
+	if len(msg.ImageParts) != 1 {
+		t.Fatalf("expected 1 image part, got %d", len(msg.ImageParts))
+	}
+	if msg.ImageParts[0].URL != "data:image/png;base64,iVBORw0KGgo=" {
+		t.Errorf("unexpected image URL %q", msg.ImageParts[0].URL)
+	}
+}
+
+func TestParseAnthropicMessages_URLImage(t *testing.T) {
+	// Anthropic-format user message with a URL image source.
+	msgs := []AnthropicMessage{
+		{
+			Role: "user",
+			Content: json.RawMessage(`[
+				{"type":"image","source":{"type":"url","url":"https://example.com/photo.jpg"}},
+				{"type":"text","text":"describe it"}
+			]`),
+		},
+	}
+
+	result, err := ParseAnthropicMessages(msgs, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	msg := result[0]
+	if len(msg.ImageParts) != 1 {
+		t.Fatalf("expected 1 image part, got %d", len(msg.ImageParts))
+	}
+	if msg.ImageParts[0].URL != "https://example.com/photo.jpg" {
+		t.Errorf("unexpected image URL %q", msg.ImageParts[0].URL)
+	}
+	if msg.Content != "describe it" {
+		t.Errorf("unexpected content %q", msg.Content)
+	}
+}
+
 func TestParseOpenAIMessages_UnsupportedPartType(t *testing.T) {
 	// input_audio must still return an error.
 	msgs := []OpenAIMessage{

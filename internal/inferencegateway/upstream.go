@@ -61,8 +61,39 @@ func (c UpstreamConfig) resolveAPIKey() string {
 
 // RouteConfig maps a model name (or glob) to an upstream name.
 type RouteConfig struct {
-	Model    string `yaml:"model"`    // exact match or "*" wildcard
-	Upstream string `yaml:"upstream"` // upstream name
+	Model        string   `yaml:"model"`         // exact match or glob
+	Upstream     string   `yaml:"upstream"`      // upstream name
+	StripImages  bool     `yaml:"strip_images"`  // drop image parts before forwarding (for text-only models)
+	StripTools   bool     `yaml:"strip_tools"`   // drop tool definitions before forwarding (for models that reject tool use)
+	Capabilities []string `yaml:"capabilities"`  // explicit capability list; derived from strip flags when absent
+}
+
+// EffectiveCapabilities returns the model's capabilities for this route.
+// If Capabilities is explicitly set, those are returned as-is.
+// Otherwise the full default set is returned with entries removed for each
+// active strip flag, so clients know what the model actually supports.
+func (r RouteConfig) EffectiveCapabilities() []string {
+	if len(r.Capabilities) > 0 {
+		return r.Capabilities
+	}
+	caps := []string{"vision", "tool_use"}
+	if r.StripImages {
+		caps = removeString(caps, "vision")
+	}
+	if r.StripTools {
+		caps = removeString(caps, "tool_use")
+	}
+	return caps
+}
+
+func removeString(ss []string, target string) []string {
+	out := ss[:0:len(ss)]
+	for _, s := range ss {
+		if s != target {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // Upstream wraps an llm.Client with its config.
@@ -226,6 +257,21 @@ func (r *Router) Resolve(model string) *Upstream {
 		}
 	}
 	return r.fallback
+}
+
+// RouteFor returns the RouteConfig that matched model and true, or a zero
+// RouteConfig and false if no explicit route matched (fallback upstream applies).
+func (r *Router) RouteFor(model string) (RouteConfig, bool) {
+	for _, route := range r.routes {
+		matched, err := filepath.Match(route.Model, model)
+		if err != nil {
+			continue
+		}
+		if matched {
+			return route, true
+		}
+	}
+	return RouteConfig{}, false
 }
 
 // IndexModels records model → upstreamName mappings discovered via ListModels.

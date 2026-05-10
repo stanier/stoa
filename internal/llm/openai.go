@@ -682,13 +682,27 @@ func (c *OpenAIClient) StreamMessage(ctx context.Context, messages []chat.Messag
 
 // ListModels returns all models available from this OpenAI-compatible endpoint.
 func (c *OpenAIClient) ListModels(ctx context.Context) ([]string, error) {
+	infos, err := c.ListModelInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(infos))
+	for i, m := range infos {
+		ids[i] = m.ID
+	}
+	return ids, nil
+}
+
+// ListModelInfo returns models from the OpenAI-compatible endpoint.
+// The OpenAI /v1/models API does not expose capability flags, so only IDs are populated.
+func (c *OpenAIClient) ListModelInfo(ctx context.Context) ([]ModelInfo, error) {
 	page, err := c.client.Models.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list models: %w", err)
 	}
-	ids := make([]string, 0, len(page.Data))
+	infos := make([]ModelInfo, 0, len(page.Data))
 	for _, m := range page.Data {
-		ids = append(ids, m.ID)
+		infos = append(infos, ModelInfo{ID: m.ID})
 	}
-	return ids, nil
+	return infos, nil
 }

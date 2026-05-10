@@ -171,9 +171,12 @@ type geminiUsage struct {
 }
 
 type geminiModelList struct {
-	Models []struct {
-		Name string `json:"name"` // e.g. "models/gemini-2.0-flash"
-	} `json:"models"`
+	Models []geminiModelEntry `json:"models"`
+}
+
+type geminiModelEntry struct {
+	Name                       string   `json:"name"`                       // e.g. "models/gemini-2.0-flash"
+	SupportedGenerationMethods []string `json:"supportedGenerationMethods"` // e.g. ["generateContent","countTokens"]
 }
 
 // ─── conversion helpers ────────────────────────────────────────────────────
@@ -417,6 +420,19 @@ func (c *GeminiClient) StreamMessage(ctx context.Context, messages []chat.Messag
 }
 
 func (c *GeminiClient) ListModels(ctx context.Context) ([]string, error) {
+	infos, err := c.ListModelInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(infos))
+	for i, m := range infos {
+		ids[i] = m.ID
+	}
+	return ids, nil
+}
+
+// ListModelInfo returns Gemini models with capabilities inferred from supportedGenerationMethods.
+func (c *GeminiClient) ListModelInfo(ctx context.Context) ([]ModelInfo, error) {
 	url := c.baseURL + "/models"
 	if c.apiKey != "" {
 		url += "?key=" + c.apiKey
@@ -438,12 +454,20 @@ func (c *GeminiClient) ListModels(ctx context.Context) ([]string, error) {
 	if err := json.Unmarshal(body, &list); err != nil {
 		return nil, fmt.Errorf("gemini list models parse: %w", err)
 	}
-	ids := make([]string, 0, len(list.Models))
+	infos := make([]ModelInfo, 0, len(list.Models))
 	for _, m := range list.Models {
-		// Strip "models/" prefix to return bare IDs like "gemini-2.0-flash"
-		ids = append(ids, strings.TrimPrefix(m.Name, "models/"))
+		id := strings.TrimPrefix(m.Name, "models/")
+		info := ModelInfo{ID: id}
+		for _, method := range m.SupportedGenerationMethods {
+			if method == "generateContent" {
+				// All generateContent models support vision and tool use in Gemini.
+				info.Vision = true
+				info.ToolUse = true
+			}
+		}
+		infos = append(infos, info)
 	}
-	return ids, nil
+	return infos, nil
 }
 
 func makeGeminiToolID(name string) string {

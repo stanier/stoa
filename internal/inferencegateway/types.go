@@ -165,6 +165,7 @@ type AnthropicContentBlock struct {
 	Input     json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"` // for tool_result
+	Source    json.RawMessage `json:"source,omitempty"`  // for image blocks
 }
 
 // AnthropicTool describes a callable tool.

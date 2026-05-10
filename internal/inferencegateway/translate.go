@@ -127,7 +127,7 @@ func ParseAnthropicMessages(msgs []AnthropicMessage, systemRaw json.RawMessage) 
 	}
 
 	for _, m := range msgs {
-		content, toolUseID, toolName, err := extractAnthropicContent(m.Content)
+		content, imageParts, toolUseID, toolName, err := extractAnthropicContent(m.Content)
 		if err != nil {
 			return nil, fmt.Errorf("message %q: %w", m.Role, err)
 		}
@@ -136,7 +136,9 @@ func ParseAnthropicMessages(msgs []AnthropicMessage, systemRaw json.RawMessage) 
 			if toolUseID != "" {
 				result = append(result, chat.NewToolResultMessage(toolName, toolUseID, content, true))
 			} else {
-				result = append(result, chat.NewUserMessage(content))
+				msg := chat.NewUserMessage(content)
+				msg.ImageParts = imageParts
+				result = append(result, msg)
 			}
 		case "assistant":
 			result = append(result, chat.NewAssistantMessage(content))
@@ -186,23 +188,24 @@ func extractAnthropicSystem(raw json.RawMessage) (string, error) {
 	return sb.String(), nil
 }
 
-// extractAnthropicContent extracts text from an Anthropic message content field.
-// Returns (text, toolUseID, toolName, err).
-func extractAnthropicContent(raw json.RawMessage) (string, string, string, error) {
+// extractAnthropicContent extracts text and image parts from an Anthropic message
+// content field (string or []block). Returns (text, imageParts, toolUseID, toolName, err).
+func extractAnthropicContent(raw json.RawMessage) (string, []chat.ImagePart, string, string, error) {
 	if len(raw) == 0 {
-		return "", "", "", nil
+		return "", nil, "", "", nil
 	}
 	// Plain string
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
-		return s, "", "", nil
+		return s, nil, "", "", nil
 	}
 	// Array of content blocks
 	var blocks []AnthropicContentBlock
 	if err := json.Unmarshal(raw, &blocks); err != nil {
-		return "", "", "", fmt.Errorf("cannot parse message content: %w", err)
+		return "", nil, "", "", fmt.Errorf("cannot parse message content: %w", err)
 	}
 	var sb strings.Builder
+	var imageParts []chat.ImagePart
 	var toolUseID, toolName string
 	for _, b := range blocks {
 		switch b.Type {
@@ -212,12 +215,35 @@ func extractAnthropicContent(raw json.RawMessage) (string, string, string, error
 			toolUseID = b.ToolUseID
 			// Content may be string or blocks
 			if len(b.Content) > 0 {
-				inner, _, _, _ := extractAnthropicContent(b.Content)
+				inner, _, _, _, _ := extractAnthropicContent(b.Content)
 				sb.WriteString(inner)
 			}
+		case "image":
+			if len(b.Source) == 0 {
+				continue
+			}
+			var src struct {
+				Type      string `json:"type"`
+				MediaType string `json:"media_type,omitempty"`
+				Data      string `json:"data,omitempty"`
+				URL       string `json:"url,omitempty"`
+			}
+			if err := json.Unmarshal(b.Source, &src); err != nil {
+				continue
+			}
+			var ip chat.ImagePart
+			switch src.Type {
+			case "base64":
+				ip.URL = fmt.Sprintf("data:%s;base64,%s", src.MediaType, src.Data)
+			case "url":
+				ip.URL = src.URL
+			default:
+				continue
+			}
+			imageParts = append(imageParts, ip)
 		}
 	}
-	return sb.String(), toolUseID, toolName, nil
+	return sb.String(), imageParts, toolUseID, toolName, nil
 }
 
 // ─── internal StreamChunk → OpenAI SSE ────────────────────────────────────
@@ -438,6 +464,27 @@ func MakeAnthropicResponse(content string, toolCalls []llm.ToolUse, id, model st
 		StopSequence: stopSeqPtr,
 		Usage:        AnthropicUsage{InputTokens: inputTokens, OutputTokens: outputTokens},
 	}
+}
+
+// ─── Message helpers ───────────────────────────────────────────────────────
+
+// stripTools returns a nil slice, dropping all tool definitions before forwarding.
+// Used for routes with strip_tools: true (models that reject tool use entirely).
+func stripTools(tools []llm.Tool) []llm.Tool {
+	return nil
+}
+
+// stripImages returns a copy of messages with all ImageParts cleared.
+// Used for routes with strip_images: true (text-only models that reject vision input).
+func stripImages(messages []chat.Message) []chat.Message {
+	out := make([]chat.Message, len(messages))
+	copy(out, messages)
+	for i := range out {
+		if len(out[i].ImageParts) > 0 {
+			out[i].ImageParts = nil
+		}
+	}
+	return out
 }
 
 // ─── SSE helpers ───────────────────────────────────────────────────────────

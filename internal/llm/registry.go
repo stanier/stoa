@@ -10,8 +10,8 @@ import (
 	"github.com/stanier/stoa/internal/logging"
 )
 
-// ModelInfo describes a model available from a provider.
-type ModelInfo struct {
+// RegistryModel describes a model available from a provider in the registry.
+type RegistryModel struct {
 	Provider string `json:"provider"`
 	ID       string `json:"id"`
 }
@@ -118,14 +118,14 @@ func (r *ProviderRegistry) GetClient(name string) (Client, bool) {
 }
 
 // ListAllModels returns all known models across all providers.
-func (r *ProviderRegistry) ListAllModels() []ModelInfo {
+func (r *ProviderRegistry) ListAllModels() []RegistryModel {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var result []ModelInfo
+	var result []RegistryModel
 	for _, name := range r.order {
 		for _, id := range r.models[name] {
-			result = append(result, ModelInfo{Provider: name, ID: id})
+			result = append(result, RegistryModel{Provider: name, ID: id})
 		}
 	}
 	return result
