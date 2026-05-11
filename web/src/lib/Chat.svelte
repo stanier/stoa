@@ -3,6 +3,7 @@
   import SettingsPanel from './SettingsPanel.svelte'
   import ToolsPanel from './ToolsPanel.svelte'
   import ModelPicker from './ModelPicker.svelte'
+  import { apiFetch } from './utils.js'
   import { marked } from 'marked'
   import hljs from 'highlight.js/lib/core'
   import langBash       from 'highlight.js/lib/languages/bash'
@@ -365,7 +366,7 @@
       const form = new FormData()
       form.append('file', file)
       try {
-        const res = await fetch('/api/upload', { method: 'POST', body: form })
+        const res = await apiFetch('/api/upload', { method: 'POST', body: form })
         if (!res.ok) { error = `Upload failed: ${file.name}`; continue }
         const data = await res.json()
         pendingFiles = [...pendingFiles, { name: data.name, attachmentId: data.attachment_id, path: data.path, size: data.size, mimeType: file.type }]
@@ -718,9 +719,8 @@
     border-top-color: var(--accent); border-radius: 50%;
     animation: spin .7s linear infinite;
   }
-  @keyframes spin { to { transform: rotate(360deg); } }
   .tool-result { margin-top: 0.3rem; color: var(--text3); white-space: pre-wrap; word-break: break-word; }
-  .tool-result.error { color: #fca5a5; }
+  .tool-result.error { color: var(--danger-light); }
   .tool-params { margin-top: 0.3rem; color: var(--text4); white-space: pre-wrap; word-break: break-word; font-size: 0.75rem; }
 
   .msg-compaction { display: flex; justify-content: center; }
@@ -731,8 +731,8 @@
   }
 
   .error-banner {
-    background: #3b1515; border-top: 1px solid #7f1d1d;
-    color: #fca5a5; font-size: 0.85rem; padding: 0.5rem 1.25rem; flex-shrink: 0;
+    background: var(--danger-bg); border-top: 1px solid var(--danger-btn-hover);
+    color: var(--danger-light); font-size: 0.85rem; padding: 0.5rem 1.25rem; flex-shrink: 0;
   }
 
   .modal-backdrop {
@@ -779,7 +779,7 @@
     background: none; border: none; color: var(--text4); cursor: pointer;
     padding: 0; line-height: 1; font-size: 0.75rem;
   }
-  .file-pill button:hover { color: #fca5a5; }
+  .file-pill button:hover { color: var(--danger-light); }
 
   .input-bar {
     display: flex; gap: 0.5rem; padding: 0.75rem 1.25rem;

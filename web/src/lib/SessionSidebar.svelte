@@ -1,4 +1,6 @@
 <script>
+  import { apiFetch } from './utils.js'
+
   let { sessions, activeId, user, theme = 'dark-stone', showAll = $bindable(false), collapsed = $bindable(false), searchQuery = $bindable(''), onSelect, onNew, onDelete, onAccount, onApiKeys, onAgents, onThemeChange } = $props()
 
   let confirmId    = $state(null)
@@ -233,7 +235,7 @@
     visibility: hidden;
   }
   .session-item:hover button.delete-btn { visibility: visible; }
-  button.delete-btn:hover { color: #fca5a5; background: #3b1515; }
+  button.delete-btn:hover { color: var(--danger-light); background: var(--danger-bg); }
 
   /* Footer */
   .user-footer {
@@ -423,10 +425,10 @@
     font-size: 0.8rem;
     cursor: pointer;
     border: none;
-    background: #7f1d1d;
-    color: #fca5a5;
+    background: var(--danger-btn-hover);
+    color: var(--danger-light);
   }
-  button.conf-delete:hover { background: #991b1b; }
+  button.conf-delete:hover { background: var(--danger-btn); }
 
   /* Edge pill handle */
   .pill-handle {
@@ -542,7 +544,7 @@
               >{t.label}</button>
             {/each}
           </div>
-          <button class="menu-item" onclick={() => { fetch('/auth/logout', { method: 'POST' }).then(() => { window.location.href = '/' }) }}>Sign out</button>
+          <button class="menu-item" onclick={() => { apiFetch('/auth/logout', { method: 'POST' }).then(() => { window.location.href = '/' }) }}>Sign out</button>
         </div>
       {/if}
       <button class="user-btn" class:centered={collapsed} onclick={toggleUserMenu}>

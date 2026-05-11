@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import UsagePanel from './UsagePanel.svelte'
+  import McpServerList from './McpServerList.svelte'
 
   let { onBack } = $props()
 
@@ -42,9 +43,6 @@
       ])
       if (toolsRes.ok) {
         allTools = await toolsRes.json()
-        collapsedServers = new Set(
-          allTools.filter(t => t.source !== 'builtin').map(t => t.source.replace(/^mcp_/, ''))
-        )
       } else {
         toolsError = `Could not load tools (${toolsRes.status}).`
       }
@@ -62,30 +60,14 @@
     }
   }
 
-  let collapsedServers = $state(new Set())
-
-  function toggleCollapse(server) {
-    const next = new Set(collapsedServers)
-    if (next.has(server)) next.delete(server)
-    else next.add(server)
-    collapsedServers = next
-  }
-
-  let mcpServers = $derived(
-    [...new Set(
-      allTools
-        .filter(t => t.source !== 'builtin')
-        .map(t => t.source.replace(/^mcp_/, ''))
-    )]
-  )
-
   function serverEnabled(serverName) {
     return prefs.servers[serverName] !== false
   }
 
-  function toolEnabled(toolName, serverName) {
+  function toolEnabled(toolName) {
     if (toolName in prefs.tools) return prefs.tools[toolName]
-    return serverEnabled(serverName)
+    const server = allTools.find(t => t.name === toolName)?.source.replace(/^mcp_/, '')
+    return serverEnabled(server)
   }
 
   async function toggleServer(serverName, enabled) {
@@ -216,60 +198,7 @@
     animation: spin 0.7s linear infinite;
     margin: 3rem auto;
   }
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  .error { color: #f87171; font-size: 0.9rem; margin-top: 1rem; }
-
-  .server-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.45rem 0;
-    border-bottom: 1px solid var(--surface-hi);
-    gap: 0.5rem;
-  }
-  .server-row:last-child { border-bottom: none; }
-
-  button.chevron {
-    background: none; border: none; color: var(--text4);
-    cursor: pointer; font-size: 0.6rem; padding: 0.1rem 0.25rem;
-    line-height: 1; flex-shrink: 0; transition: color 0.15s, transform 0.15s;
-  }
-  button.chevron:hover { color: var(--text2); }
-  button.chevron.open { transform: rotate(90deg); }
-
-  .server-name { font-size: 0.85rem; font-weight: 500; color: var(--text2); flex: 1; }
-
-  .tool-rows {
-    padding-left: 0.75rem;
-    border-left: 2px solid var(--surface-hi);
-    margin: 0.25rem 0 0.5rem 0;
-  }
-
-  .tool-row {
-    display: flex; align-items: flex-start; justify-content: space-between;
-    padding: 0.3rem 0; gap: 0.5rem;
-  }
-
-  .tool-info { flex: 1; min-width: 0; }
-
-  .tool-name { font-size: 0.78rem; color: var(--text3); font-family: monospace; word-break: break-all; }
-  .tool-name.disabled { color: var(--text5); }
-
-  .toggle { position: relative; flex-shrink: 0; width: 30px; height: 16px; margin-top: 2px; }
-  .toggle input { opacity: 0; width: 0; height: 0; }
-  .toggle-track {
-    position: absolute; inset: 0; background: var(--border);
-    border-radius: 8px; cursor: pointer; transition: background 0.2s;
-  }
-  .toggle input:checked + .toggle-track { background: var(--accent); }
-  .toggle-track::after {
-    content: ''; position: absolute; left: 2px; top: 2px;
-    width: 12px; height: 12px; background: var(--text);
-    border-radius: 50%; transition: transform 0.2s;
-  }
-  .toggle input:checked + .toggle-track::after { transform: translateX(14px); background: var(--bg); }
-  .toggle input:disabled + .toggle-track { opacity: 0.4; cursor: not-allowed; }
+  .error { color: var(--danger); font-size: 0.9rem; margin-top: 1rem; }
 
   .no-tools { font-size: 0.85rem; color: var(--text3); font-style: italic; }
 
@@ -353,45 +282,17 @@
         <div class="tools-spinner"></div>
       {:else if toolsError}
         <p class="error">{toolsError}</p>
-      {:else if mcpServers.length === 0}
+      {:else if allTools.filter(t => t.source !== 'builtin').length === 0}
         <span class="no-tools">No MCP servers configured</span>
       {:else}
-        {#each mcpServers as server}
-          {@const serverTools = allTools.filter(t => t.source === 'mcp_' + server)}
-          {@const isOpen = !collapsedServers.has(server)}
-          <div class="server-row">
-            <button class="chevron" class:open={isOpen}
-              onclick={() => toggleCollapse(server)}
-              title={isOpen ? 'Collapse' : 'Expand'}>▶</button>
-            <span class="server-name">{server}</span>
-            <label class="toggle" title="Enable/disable all {server} tools">
-              <input type="checkbox"
-                checked={serverEnabled(server)}
-                disabled={saving}
-                onchange={e => toggleServer(server, e.target.checked)} />
-              <span class="toggle-track"></span>
-            </label>
-          </div>
-          {#if isOpen}
-            <div class="tool-rows">
-              {#each serverTools as tool}
-                {@const enabled = toolEnabled(tool.name, server)}
-                <div class="tool-row">
-                  <div class="tool-info">
-                    <div class="tool-name" class:disabled={!enabled}>{tool.name}</div>
-                  </div>
-                  <label class="toggle">
-                    <input type="checkbox"
-                      checked={enabled}
-                      disabled={saving}
-                      onchange={e => toggleTool(tool.name, e.target.checked)} />
-                    <span class="toggle-track"></span>
-                  </label>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        {/each}
+        <McpServerList
+          {allTools}
+          {saving}
+          {serverEnabled}
+          {toolEnabled}
+          onToggleServer={toggleServer}
+          onToggleTool={toggleTool}
+        />
       {/if}
     </div>
   {/if}

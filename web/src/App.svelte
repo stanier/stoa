@@ -1,5 +1,6 @@
 <script>
   import { onMount, untrack } from 'svelte'
+  import { apiFetch } from './lib/utils.js'
   import Chat from './lib/Chat.svelte'
   import SessionSidebar from './lib/SessionSidebar.svelte'
   import Account from './lib/Account.svelte'
@@ -12,9 +13,7 @@
   let activeId  = $state(null)
   let showAll   = $state(false)
   let sidebarCollapsed = $state(false)
-  let showAccount = $state(false)
-  let showApiKeys = $state(false)
-  let showAgents  = $state(false)
+  let activePanel = $state(null) // 'account' | 'apikeys' | 'agents' | null
   let searchQuery = $state('')
   let theme       = $state('dark-stone')
   let settingsOpen = $state(false)
@@ -72,7 +71,7 @@
   }
 
   async function deleteSession(id) {
-    await fetch(`/api/sessions/${id}`, { method: 'DELETE' })
+    await apiFetch(`/api/sessions/${id}`, { method: 'DELETE' })
     pooledIds = pooledIds.filter(pid => pid !== id)
     if (id === activeId) activeId = null
     await loadSessions()
@@ -80,7 +79,7 @@
   }
 
   async function createSession() {
-    const res = await fetch('/api/sessions', {
+    const res = await apiFetch('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ persona: 'default', source: 'web' }),
@@ -119,73 +118,109 @@
     --text3:        #857d75;
     --text4:        #5e5852;
     --text5:        #3a3632;
-    --accent:       #a89a8a;
-    --accent-light: #d4c8bc;
-    --accent-dark:  #8a7e72;
-    --bubble-user:  #3c3835;
+    --accent:           #a89a8a;
+    --accent-light:     #d4c8bc;
+    --accent-dark:      #8a7e72;
+    --bubble-user:      #3c3835;
+    --danger:           #f87171;
+    --danger-light:     #fca5a5;
+    --danger-bg:        #3b1515;
+    --danger-border:    #4b1c1c;
+    --danger-btn:       #991b1b;
+    --danger-btn-hover: #7f1d1d;
+    --success:          #86efac;
+    --success-bg:       #166534;
+    --success-bg-hover: #15803d;
     color-scheme: dark;
     background: #0e0d0c;
   }
 
   :global([data-theme="marble"]) {
-    --bg:           #f4f2ef;
-    --sidebar:      #eceae6;
-    --surface:      #f9f7f5;
-    --surface-hi:   #eae7e3;
-    --depth:        #e0ddd8;
-    --hover:        #e2dfda;
-    --border:       #c4bfb8;
-    --text:         #14110f;
-    --text2:        #3d3832;
-    --text3:        #5e574f;
-    --text4:        #7d756c;
-    --text5:        #a09a92;
-    --accent:       #3a322a;
-    --accent-light: #6a5e54;
-    --accent-dark:  #1c1612;
-    --bubble-user:  #3a3330;
+    --bg:               #f4f2ef;
+    --sidebar:          #eceae6;
+    --surface:          #f9f7f5;
+    --surface-hi:       #eae7e3;
+    --depth:            #e0ddd8;
+    --hover:            #e2dfda;
+    --border:           #c4bfb8;
+    --text:             #14110f;
+    --text2:            #3d3832;
+    --text3:            #5e574f;
+    --text4:            #7d756c;
+    --text5:            #a09a92;
+    --accent:           #3a322a;
+    --accent-light:     #6a5e54;
+    --accent-dark:      #1c1612;
+    --bubble-user:      #3a3330;
+    --danger:           #f87171;
+    --danger-light:     #fca5a5;
+    --danger-bg:        #3b1515;
+    --danger-border:    #4b1c1c;
+    --danger-btn:       #991b1b;
+    --danger-btn-hover: #7f1d1d;
+    --success:          #86efac;
+    --success-bg:       #166534;
+    --success-bg-hover: #15803d;
     color-scheme: light;
     background: #f4f2ef;
   }
 
   :global([data-theme="sandstone"]) {
-    --bg:           #18120a;
-    --sidebar:      #1c160d;
-    --surface:      #251c12;
-    --surface-hi:   #322618;
-    --depth:        #100c06;
-    --hover:        #36291a;
-    --border:       #4a3a24;
-    --text:         #f4e6d0;
-    --text2:        #b89c78;
-    --text3:        #8a7250;
-    --text4:        #5e4a32;
-    --text5:        #3a2e1d;
-    --accent:       #d49858;
-    --accent-light: #ecbc7c;
-    --accent-dark:  #a87838;
-    --bubble-user:  #5a3e20;
+    --bg:               #18120a;
+    --sidebar:          #1c160d;
+    --surface:          #251c12;
+    --surface-hi:       #322618;
+    --depth:            #100c06;
+    --hover:            #36291a;
+    --border:           #4a3a24;
+    --text:             #f4e6d0;
+    --text2:            #b89c78;
+    --text3:            #8a7250;
+    --text4:            #5e4a32;
+    --text5:            #3a2e1d;
+    --accent:           #d49858;
+    --accent-light:     #ecbc7c;
+    --accent-dark:      #a87838;
+    --bubble-user:      #5a3e20;
+    --danger:           #f87171;
+    --danger-light:     #fca5a5;
+    --danger-bg:        #3b1515;
+    --danger-border:    #4b1c1c;
+    --danger-btn:       #991b1b;
+    --danger-btn-hover: #7f1d1d;
+    --success:          #86efac;
+    --success-bg:       #166534;
+    --success-bg-hover: #15803d;
     color-scheme: dark;
     background: #18120a;
   }
 
   :global([data-theme="slate"]) {
-    --bg:           #0b0d10;
-    --sidebar:      #0e1114;
-    --surface:      #171c25;
-    --surface-hi:   #1f2632;
-    --depth:        #08090c;
-    --hover:        #242c3a;
-    --border:       #2c3440;
-    --text:         #e4e8ee;
-    --text2:        #94a0ae;
-    --text3:        #6a7585;
-    --text4:        #48525e;
-    --text5:        #2c343f;
-    --accent:       #7090b0;
-    --accent-light: #a0bcd8;
-    --accent-dark:  #4a6888;
-    --bubble-user:  #1e3a58;
+    --bg:               #0b0d10;
+    --sidebar:          #0e1114;
+    --surface:          #171c25;
+    --surface-hi:       #1f2632;
+    --depth:            #08090c;
+    --hover:            #242c3a;
+    --border:           #2c3440;
+    --text:             #e4e8ee;
+    --text2:            #94a0ae;
+    --text3:            #6a7585;
+    --text4:            #48525e;
+    --text5:            #2c343f;
+    --accent:           #7090b0;
+    --accent-light:     #a0bcd8;
+    --accent-dark:      #4a6888;
+    --bubble-user:      #1e3a58;
+    --danger:           #f87171;
+    --danger-light:     #fca5a5;
+    --danger-bg:        #3b1515;
+    --danger-border:    #4b1c1c;
+    --danger-btn:       #991b1b;
+    --danger-btn-hover: #7f1d1d;
+    --success:          #86efac;
+    --success-bg:       #166534;
+    --success-bg-hover: #15803d;
     color-scheme: dark;
     background: #0b0d10;
   }
@@ -257,24 +292,24 @@
       onSelect={selectSession}
       onNew={createSession}
       onDelete={deleteSession}
-      onAccount={() => { showAccount = true; showApiKeys = false; showAgents = false }}
-      onApiKeys={() => { showApiKeys = true; showAccount = false; showAgents = false }}
-      onAgents={() => { showAgents = true; showAccount = false; showApiKeys = false }}
+      onAccount={() => activePanel = 'account'}
+      onApiKeys={() => activePanel = 'apikeys'}
+      onAgents={() => activePanel = 'agents'}
       onThemeChange={applyTheme}
     />
-    {#if showAccount}
-      <Account onBack={() => showAccount = false} />
-    {:else if showApiKeys}
-      <ApiKeys onBack={() => showApiKeys = false} />
-    {:else if showAgents}
+    {#if activePanel === 'account'}
+      <Account onBack={() => activePanel = null} />
+    {:else if activePanel === 'apikeys'}
+      <ApiKeys onBack={() => activePanel = null} />
+    {:else if activePanel === 'agents'}
       <AgentRegistry
-        onBack={() => showAgents = false}
-        onOpenChat={(sessionId) => { showAgents = false; activeId = sessionId; loadSessions() }}
+        onBack={() => activePanel = null}
+        onOpenChat={(sessionId) => { activePanel = null; activeId = sessionId; loadSessions() }}
       />
     {/if}
 
     {#each pooledIds as id (id)}
-      {@const chatActive = !showAccount && !showApiKeys && !showAgents && id === activeId}
+      {@const chatActive = !activePanel && id === activeId}
       <div class="chat-slot" style={chatActive ? '' : 'display: none'}>
         <Chat
           {user}
