@@ -66,7 +66,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	agentd.WarnIfNoAuth(os.Getenv("AGENTD_AUTHD_URL"))
+	if err := agentd.CheckAuthConfig(os.Getenv("AGENTD_AUTHD_URL"), os.Getenv("AGENTD_NO_AUTH")); err != nil {
+		logging.Errorf("agentd: %v", err)
+		os.Exit(1)
+	}
 
 	// Resolve TLS cert/key paths.
 	if *tlsFlag && *certFile == "" {
