@@ -87,7 +87,7 @@ services:
 
   migrate-apikeyd:
     profiles:
-      - disabled
+      - migrate
     image: apikeyd:local
     build:
       context: .
@@ -107,7 +107,7 @@ services:
 
   migrate-agentd:
     profiles:
-      - disabled
+      - migrate
     image: auth-admin:local
     build:
       context: .
@@ -125,7 +125,7 @@ services:
 
   migrate-authd:
     profiles:
-      - disabled
+      - migrate
     image: auth-admin:local
     build:
       context: .
@@ -144,7 +144,7 @@ services:
 
   migrate-localidp:
     profiles:
-      - disabled
+      - migrate
     image: auth-admin:local
     build:
       context: .

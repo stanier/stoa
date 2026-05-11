@@ -238,7 +238,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 
 **auth-admin usage**:
 ```bash
-auth-admin authd migrate [up|down|status|version]   # AUTHD_MIGRATE_DATABASE_URL
+auth-admin authd migrate [up|down|status|version]   # needs AUTHD_MIGRATE_DATABASE_URL; prefer compose --profile migrate run
 auth-admin authd user list
 auth-admin authd user revoke <email>
 auth-admin authd service create <id> [--ttl-hours N]
@@ -252,17 +252,23 @@ auth-admin idp user delete --username U
 ```
 
 **Running auth-admin via compose** (recommended — correct DB URL and network are already wired):
+
+The migrate services (`migrate-agentd`, `migrate-authd`, `migrate-localidp`, `migrate-apikeyd`) use `profiles: [migrate]` so they are excluded from `podman-compose up` but remain explicitly runnable. Use `podman-compose --profile migrate run --rm <service>` to invoke them. Note: podman-compose 1.3.x has a bug where `run --rm <service>` fails with "missing services" unless `--profile migrate` is passed even when the service exists.
+
 ```bash
-# Create the first local-idp user (substitute migrate-authd/migrate-agentd for authd/agentd commands)
-podman compose run --rm migrate-localidp idp user create \
+# Run agentd DB migrations
+podman-compose --profile migrate run --rm migrate-agentd
+
+# Create the first local-idp user
+podman-compose --profile migrate run --rm migrate-localidp idp user create \
   --username yourname --email you@example.com --password yourpassword
 
 # Other idp user ops
-podman compose run --rm migrate-localidp idp user list
-podman compose run --rm migrate-localidp idp user reset-password --username U --password P
+podman-compose --profile migrate run --rm migrate-localidp idp user list
+podman-compose --profile migrate run --rm migrate-localidp idp user reset-password --username U --password P
 
 # authd service token (e.g. for a bridge)
-podman compose run --rm migrate-authd authd service create zulip-bridge
+podman-compose --profile migrate run --rm migrate-authd authd service create zulip-bridge
 ```
 
 **TUI remote mode**: Set `AGENT_ADDRESS=http://host:port` (or `agent.address` in config). If set and no LLM key, TUI skips LLM validation and connects to agentd.

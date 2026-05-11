@@ -17,6 +17,7 @@ type Session struct {
 	Persona           string
 	Source            string
 	Title             string
+	ProjectID         string          // empty when session is not assigned to a project
 	CreatedAt         time.Time
 	LastActiveAt      time.Time
 	LastInputTokens   int
@@ -43,12 +44,12 @@ func (d *DB) CreateSession(ctx context.Context, id, userID, persona, source stri
 // user are never returned. Pass userID="" to return all sessions (service accounts).
 func (d *DB) ListSessions(ctx context.Context, userID string) ([]Session, error) {
 	const qAll = `
-		SELECT id, COALESCE(user_id,''), persona, source, title, created_at, last_active_at,
-		       last_input_tokens, total_output_tokens, llm_overrides
+		SELECT id, COALESCE(user_id,''), persona, source, title, COALESCE(project_id,''),
+		       created_at, last_active_at, last_input_tokens, total_output_tokens, llm_overrides
 		FROM agentd_sessions ORDER BY last_active_at DESC`
 	const qUser = `
-		SELECT id, COALESCE(user_id,''), persona, source, title, created_at, last_active_at,
-		       last_input_tokens, total_output_tokens, llm_overrides
+		SELECT id, COALESCE(user_id,''), persona, source, title, COALESCE(project_id,''),
+		       created_at, last_active_at, last_input_tokens, total_output_tokens, llm_overrides
 		FROM agentd_sessions
 		WHERE user_id=$1 OR user_id IS NULL
 		ORDER BY last_active_at DESC`
@@ -90,12 +91,12 @@ func (d *DB) TouchLastActive(ctx context.Context, id string) error {
 // GetSession returns a single session by ID, or nil if not found.
 func (d *DB) GetSession(ctx context.Context, id string) (*Session, error) {
 	const q = `
-		SELECT id, COALESCE(user_id,''), persona, source, title, created_at, last_active_at,
-		       last_input_tokens, total_output_tokens, llm_overrides
+		SELECT id, COALESCE(user_id,''), persona, source, title, COALESCE(project_id,''),
+		       created_at, last_active_at, last_input_tokens, total_output_tokens, llm_overrides
 		FROM agentd_sessions WHERE id=$1`
 	var s Session
 	err := d.pool.QueryRow(ctx, q, id).Scan(
-		&s.ID, &s.UserID, &s.Persona, &s.Source, &s.Title,
+		&s.ID, &s.UserID, &s.Persona, &s.Source, &s.Title, &s.ProjectID,
 		&s.CreatedAt, &s.LastActiveAt, &s.LastInputTokens, &s.TotalOutputTokens,
 		&s.Overrides,
 	)
@@ -145,6 +146,7 @@ func (d *DB) SearchSessions(ctx context.Context, userID, q string) ([]Session, e
 	const qAll = `
 		SELECT DISTINCT ON (s.id)
 		       s.id, COALESCE(s.user_id,''), s.persona, s.source, s.title,
+		       COALESCE(s.project_id,''),
 		       s.created_at, s.last_active_at, s.last_input_tokens, s.total_output_tokens,
 		       s.llm_overrides
 		FROM agentd_sessions s
@@ -155,6 +157,7 @@ func (d *DB) SearchSessions(ctx context.Context, userID, q string) ([]Session, e
 	const qUser = `
 		SELECT DISTINCT ON (s.id)
 		       s.id, COALESCE(s.user_id,''), s.persona, s.source, s.title,
+		       COALESCE(s.project_id,''),
 		       s.created_at, s.last_active_at, s.last_input_tokens, s.total_output_tokens,
 		       s.llm_overrides
 		FROM agentd_sessions s
@@ -201,6 +204,7 @@ func scanSessions(rows pgxRows) ([]Session, error) {
 	for rows.Next() {
 		var s Session
 		if err := rows.Scan(&s.ID, &s.UserID, &s.Persona, &s.Source, &s.Title,
+			&s.ProjectID,
 			&s.CreatedAt, &s.LastActiveAt, &s.LastInputTokens, &s.TotalOutputTokens,
 			&s.Overrides); err != nil {
 			return nil, fmt.Errorf("agentdb: scan session: %w", err)

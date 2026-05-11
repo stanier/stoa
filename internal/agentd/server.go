@@ -375,6 +375,10 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/agents", s.handleAgents)
 	mux.HandleFunc("/agents/", s.handleAgentsByName)
 
+	// Project CRUD.
+	mux.HandleFunc("/projects", s.handleProjects)
+	mux.HandleFunc("/projects/", s.handleProjectsByID)
+
 	// ACP surface.
 	mux.HandleFunc("/acp/ping", s.handleACPPing)
 	mux.HandleFunc("/acp/agents", s.handleACPListAgents)
@@ -538,13 +542,16 @@ func (s *Server) handleSessionSubroute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// DELETE /sessions/:id (no trailing slash or suffix) — delete the session.
+	// DELETE or PATCH /sessions/:id (no trailing slash or suffix).
 	if slash < 0 {
-		if r.Method == http.MethodDelete {
+		switch r.Method {
+		case http.MethodDelete:
 			s.handleDeleteSession(w, r, rest)
-			return
+		case http.MethodPatch:
+			s.handlePatchSession(w, r, rest)
+		default:
+			http.NotFound(w, r)
 		}
-		http.NotFound(w, r)
 		return
 	}
 

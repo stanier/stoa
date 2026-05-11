@@ -38,6 +38,7 @@ type SessionInfo struct {
 	Source       string    `json:"source"`
 	Title        string    `json:"title,omitempty"`
 	MessageCount int       `json:"message_count"`
+	ProjectID    string    `json:"project_id,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 	LastActiveAt time.Time `json:"last_active_at,omitempty"`
 }

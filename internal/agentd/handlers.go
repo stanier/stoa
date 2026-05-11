@@ -220,6 +220,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 					Persona:      ds.Persona,
 					Source:       ds.Source,
 					Title:        title,
+					ProjectID:    ds.ProjectID,
 					CreatedAt:    ds.CreatedAt.UTC().Truncate(time.Second),
 					LastActiveAt: ds.LastActiveAt.UTC().Truncate(time.Second),
 					MessageCount: msgCount,

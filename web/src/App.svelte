@@ -6,39 +6,69 @@
   import Account from './lib/Account.svelte'
   import ApiKeys from './lib/ApiKeys.svelte'
   import AgentRegistry from './lib/AgentRegistry.svelte'
+  import ProjectView from './lib/ProjectView.svelte'
 
+  // ── Existing state ──────────────────────────────────────────────────────────
   let user      = $state(null)
   let loading   = $state(true)
   let sessions  = $state([])
   let activeId  = $state(null)
   let showAll   = $state(false)
   let sidebarCollapsed = $state(false)
-  let activePanel = $state(null) // 'account' | 'apikeys' | 'agents' | null
   let searchQuery = $state('')
   let theme       = $state('dark-stone')
   let settingsOpen = $state(false)
   let toolsOpen    = $state(false)
 
+  // ── View routing (replaces activePanel) ─────────────────────────────────────
+  // 'chat' | 'project' | 'account' | 'apikeys' | 'agents'
+  let view = $state('chat')
+
+  // ── Project state ───────────────────────────────────────────────────────────
+  let projects        = $state([])
+  let activeProjectId = $state(null)
+
+  // Tweaks
+  let sidebarLayout    = $state('sections')
+  let projectIconStyle = $state('color-dot')
+
+  // ── Session pool ────────────────────────────────────────────────────────────
   const POOL_CAP = 5
   let pooledIds = $state([])
 
-  // Keep an LRU pool of mounted Chat instances so switching sessions is instant.
-  // Moving to front on each activation; evicting the tail when over cap.
   $effect(() => {
     if (!activeId) return
     const current = untrack(() => pooledIds)
     pooledIds = [activeId, ...current.filter(id => id !== activeId)].slice(0, POOL_CAP)
   })
 
-  onMount(async () => {
-    const saved = localStorage.getItem('stoa-theme')
-    if (saved) applyTheme(saved)
+  // project_id comes from the server on each session now
+  let augmentedSessions = $derived(sessions)
 
+  const PROJECT_COLORS = ['#d97757', '#3b82f6', '#10b981', '#a855f7', '#eab308', '#ec4899']
+
+  // ── Lifecycle ────────────────────────────────────────────────────────────────
+  onMount(async () => {
+    // Theme
+    const savedTheme = localStorage.getItem('stoa-theme')
+    if (savedTheme) applyTheme(savedTheme)
+
+    // Tweaks
+    try {
+      const raw = localStorage.getItem('stoa-tweaks')
+      if (raw) {
+        const t = JSON.parse(raw)
+        if (t.sidebarLayout)    sidebarLayout    = t.sidebarLayout
+        if (t.projectIconStyle) projectIconStyle = t.projectIconStyle
+      }
+    } catch (_) {}
+
+    // Auth + sessions + projects
     try {
       const res = await fetch('/api/me')
       if (res.ok) {
         user = await res.json()
-        await loadSessions()
+        await Promise.all([loadSessions(), loadProjects()])
         if (sessions.length === 0) await createSession()
         else activeId = sessions[0].id
       }
@@ -46,15 +76,22 @@
     loading = false
   })
 
+  // Persist tweaks when they change
+  $effect(() => {
+    void sidebarLayout; void projectIconStyle
+    localStorage.setItem('stoa-tweaks', JSON.stringify({ sidebarLayout, projectIconStyle }))
+  })
+
+  // ── Theme ────────────────────────────────────────────────────────────────────
   function applyTheme(t) {
     theme = t
     document.documentElement.dataset.theme = t
     localStorage.setItem('stoa-theme', t)
-    // Update color-scheme meta for Dark Reader
     const meta = document.querySelector('meta[name="color-scheme"]')
     if (meta) meta.content = t === 'marble' ? 'light' : 'dark'
   }
 
+  // ── Sessions ─────────────────────────────────────────────────────────────────
   async function loadSessions() {
     try {
       const url = searchQuery.trim()
@@ -63,9 +100,7 @@
       const res = await fetch(url)
       if (res.ok) {
         const all = await res.json() ?? []
-        sessions = all.filter(s =>
-          showAll || s.source === 'web' || !s.source
-        )
+        sessions = all.filter(s => showAll || s.source === 'web' || !s.source)
       }
     } catch (_) {}
   }
@@ -78,7 +113,7 @@
     if (!activeId && sessions.length > 0) activeId = sessions[0].id
   }
 
-  async function createSession() {
+  async function createSession(projectId = null) {
     const res = await apiFetch('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -86,12 +121,15 @@
     })
     if (!res.ok) return
     const data = await res.json()
+    if (projectId) moveSession(data.session_id, projectId)
     await loadSessions()
     activeId = data.session_id
+    view = 'chat'
   }
 
   function selectSession(id) {
     if (id !== activeId) activeId = id
+    view = 'chat'
   }
 
   $effect(() => {
@@ -99,9 +137,90 @@
     void showAll
     void searchQuery
     loadSessions()
-    const interval = setInterval(loadSessions, 10_000)
+    loadProjects()
+    const interval = setInterval(() => { loadSessions(); loadProjects() }, 10_000)
     return () => clearInterval(interval)
   })
+
+  // ── Projects ─────────────────────────────────────────────────────────────────
+  async function loadProjects() {
+    try {
+      const res = await fetch('/api/projects')
+      if (res.ok) projects = await res.json() ?? []
+    } catch (_) {}
+  }
+
+  async function createProject() {
+    const color = PROJECT_COLORS[Math.floor(Math.random() * PROJECT_COLORS.length)]
+    const body = {
+      name: 'New project',
+      description: 'Click Edit to add a description.',
+      color,
+      glyph: '✦',
+      emoji: '✨',
+      default_model: 'anthropic/claude-sonnet-4',
+      default_tools: [],
+      files: [],
+      instructions: '',
+    }
+    const res = await apiFetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) return
+    const proj = await res.json()
+    projects = [...projects, proj]
+    activeProjectId = proj.id
+    view = 'project'
+  }
+
+  async function updateProject(updated) {
+    const res = await apiFetch(`/api/projects/${updated.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: updated.name,
+        description: updated.description,
+        color: updated.color,
+        glyph: updated.glyph,
+        emoji: updated.emoji,
+        instructions: updated.instructions,
+        default_model: updated.default_model,
+        default_tools: updated.default_tools,
+        files: updated.files,
+      }),
+    })
+    if (res.ok) {
+      const saved = await res.json().catch(() => updated)
+      projects = projects.map(p => p.id === updated.id ? saved : p)
+    }
+  }
+
+  async function deleteProject(id) {
+    await apiFetch(`/api/projects/${id}`, { method: 'DELETE' })
+    projects = projects.filter(p => p.id !== id)
+    if (activeProjectId === id) {
+      activeProjectId = null
+      view = 'chat'
+    }
+    // Sessions are orphaned server-side by the FK cascade; reload to reflect.
+    await loadSessions()
+  }
+
+  function selectProject(id) {
+    activeProjectId = id
+    view = 'project'
+  }
+
+  async function moveSession(sessionId, projectId) {
+    await apiFetch(`/api/sessions/${sessionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId }),
+    })
+    await loadSessions()
+  }
 </script>
 
 <style>
@@ -282,39 +401,61 @@
 {:else}
   <div class="app-shell">
     <SessionSidebar
-      {sessions}
+      sessions={augmentedSessions}
       {activeId}
       {user}
       {theme}
+      {projects}
+      {activeProjectId}
+      {sidebarLayout}
+      {projectIconStyle}
       bind:showAll
       bind:collapsed={sidebarCollapsed}
       bind:searchQuery
       onSelect={selectSession}
-      onNew={createSession}
+      onNew={() => createSession()}
       onDelete={deleteSession}
-      onAccount={() => activePanel = 'account'}
-      onApiKeys={() => activePanel = 'apikeys'}
-      onAgents={() => activePanel = 'agents'}
+      onAccount={() => view = 'account'}
+      onApiKeys={() => view = 'apikeys'}
+      onAgents={() => view = 'agents'}
       onThemeChange={applyTheme}
+      onSelectProject={selectProject}
+      onNewProject={createProject}
+      onMoveSession={moveSession}
     />
-    {#if activePanel === 'account'}
-      <Account onBack={() => activePanel = null} />
-    {:else if activePanel === 'apikeys'}
-      <ApiKeys onBack={() => activePanel = null} />
-    {:else if activePanel === 'agents'}
+
+    {#if view === 'account'}
+      <Account onBack={() => view = 'chat'} />
+    {:else if view === 'apikeys'}
+      <ApiKeys onBack={() => view = 'chat'} />
+    {:else if view === 'agents'}
       <AgentRegistry
-        onBack={() => activePanel = null}
-        onOpenChat={(sessionId) => { activePanel = null; activeId = sessionId; loadSessions() }}
+        onBack={() => view = 'chat'}
+        onOpenChat={(sessionId) => { view = 'chat'; activeId = sessionId; loadSessions() }}
       />
+    {:else if view === 'project' && activeProjectId}
+      {@const activeProject = projects.find(p => p.id === activeProjectId)}
+      {#if activeProject}
+        <ProjectView
+          project={activeProject}
+          sessions={augmentedSessions}
+          {projectIconStyle}
+          onBack={() => view = 'chat'}
+          onNewChat={(projId) => createSession(projId)}
+          onUpdate={updateProject}
+          onDelete={deleteProject}
+          onSelectSession={selectSession}
+        />
+      {/if}
     {/if}
 
     {#each pooledIds as id (id)}
-      {@const chatActive = !activePanel && id === activeId}
+      {@const chatActive = view === 'chat' && id === activeId}
       <div class="chat-slot" style={chatActive ? '' : 'display: none'}>
         <Chat
           {user}
           sessionId={id}
-          sessionTitle={sessions.find(s => s.id === id)?.title ?? ''}
+          sessionTitle={augmentedSessions.find(s => s.id === id)?.title ?? ''}
           onSessionEnd={loadSessions}
           onTitleUpdate={loadSessions}
           active={chatActive}

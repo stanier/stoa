@@ -183,6 +183,17 @@ func (s *Server) handleAgentsProxy(w http.ResponseWriter, r *http.Request) {
 	s.proxyToAgentd(w, r, targetURL, token)
 }
 
+// handleProjectsProxy proxies /api/projects[/*] → agentd /projects[/*].
+func (s *Server) handleProjectsProxy(w http.ResponseWriter, r *http.Request) {
+	token := s.tokenFromCookie(r)
+	tail := strings.TrimPrefix(r.URL.Path, "/api/projects")
+	targetURL := s.cfg.AgentdURL + "/projects" + tail
+	if r.URL.RawQuery != "" {
+		targetURL += "?" + r.URL.RawQuery
+	}
+	s.proxyToAgentd(w, r, targetURL, token)
+}
+
 // processAttachments intercepts send_message WebSocket frames that carry attachment
 // refs from the browser. Image attachments are fetched and inlined as base64
 // ImageParts; other file types get a text note appended so the agent can call a
