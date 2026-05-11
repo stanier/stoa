@@ -210,7 +210,7 @@ services:
   # ---------------------------------------------------------------------------
 
   presidio-analyzer:
-    image: mcr.microsoft.com/presidio-analyzer:latest
+    image: mcr.microsoft.com/presidio-analyzer:2.2.362
     container_name: stoa-presidio-analyzer
     mem_limit: 1g
     memswap_limit: 1g
@@ -890,7 +890,7 @@ services:
       retries: 6
 
   squid:
-    image: docker.io/ubuntu/squid:latest
+    image: docker.io/ubuntu/squid:6.6-24.04_beta
     container_name: stoa-squid
     mem_limit: 256m
     memswap_limit: 256m
