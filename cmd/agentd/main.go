@@ -1,18 +1,16 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/stanier/stoa/internal/agentd"
 	"github.com/stanier/stoa/internal/config"
+	"github.com/stanier/stoa/internal/daemon"
 	"github.com/stanier/stoa/internal/logging"
 )
 
@@ -98,29 +96,11 @@ func main() {
 		Handler: handler,
 	}
 
-	go func() {
-		if *tlsFlag {
-			logging.Infof("agentd: listening on %s (TLS)", addr)
-			if err := httpSrv.ListenAndServeTLS(*certFile, *keyFile); err != nil && err != http.ErrServerClosed {
-				logging.Errorf("agentd: HTTPS server error: %v", err)
-				os.Exit(1)
-			}
-		} else {
-			logging.Infof("agentd: listening on %s (plaintext)", addr)
-			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				logging.Errorf("agentd: HTTP server error: %v", err)
-				os.Exit(1)
-			}
-		}
-	}()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	<-sigCh
-
-	logging.Info("agentd: shutting down, draining active connections (60s)")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	_ = httpSrv.Shutdown(shutdownCtx)
+	if *tlsFlag {
+		logging.Infof("agentd: listening on %s (TLS)", addr)
+	} else {
+		logging.Infof("agentd: listening on %s (plaintext)", addr)
+	}
+	daemon.ServeHTTP("agentd", httpSrv, 60*time.Second, *certFile, *keyFile)
 	srv.Stop()
 }

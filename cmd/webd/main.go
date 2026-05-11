@@ -1,15 +1,13 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
+	"github.com/stanier/stoa/internal/daemon"
 	"github.com/stanier/stoa/internal/logging"
 	"github.com/stanier/stoa/internal/webd"
 )
@@ -33,7 +31,7 @@ func main() {
 	}
 
 	if err := logging.Init(logging.Config{
-		Level:  logging.LogLevel(resolveStr(*logLevel, "info")),
+		Level:  logging.LogLevel(daemon.ResolveStr(*logLevel, "info")),
 		Pretty: true,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "webd: failed to init logging: %v\n", err)
@@ -60,28 +58,6 @@ func main() {
 		WriteTimeout: 620 * time.Second, // longer than the 600s proxy_read_timeout for WS
 		IdleTimeout:  120 * time.Second,
 	}
-
-	go func() {
-		logging.Infof("webd: listening on %s (external: %s)", addr, cfg.ExternalURL)
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logging.Errorf("webd: server error: %v", err)
-			os.Exit(1)
-		}
-	}()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	<-sigCh
-
-	logging.Info("webd: shutting down, draining active connections (60s)")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	_ = httpSrv.Shutdown(shutdownCtx)
-}
-
-func resolveStr(flagVal, envVal string) string {
-	if flagVal != "" {
-		return flagVal
-	}
-	return envVal
+	logging.Infof("webd: listening on %s (external: %s)", addr, cfg.ExternalURL)
+	daemon.ServeHTTP("webd", httpSrv, 60*time.Second, "", "")
 }
