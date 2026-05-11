@@ -20,20 +20,6 @@ type AnthropicClient struct {
 	pc     *config.LLMProviderConfig
 }
 
-// NewAnthropicClientSimple creates an Anthropic client with minimal parameters.
-// Useful for proxy and other lightweight consumers that don't have a full config.
-// httpClient may be nil to use the SDK default.
-func NewAnthropicClientSimple(apiKey, apiURL, defaultModel string, defaultMaxTokens int, httpClient *http.Client) (*AnthropicClient, error) {
-	pc := &config.LLMProviderConfig{
-		Type:      "anthropic",
-		APIKey:    apiKey,
-		APIURL:    apiURL,
-		Model:     defaultModel,
-		MaxTokens: defaultMaxTokens,
-	}
-	return newAnthropicClientWithHTTP(pc, httpClient)
-}
-
 // NewAnthropicClient creates a new Anthropic client from a provider config entry.
 func NewAnthropicClient(pc *config.LLMProviderConfig) (*AnthropicClient, error) {
 	return newAnthropicClientWithHTTP(pc, nil)

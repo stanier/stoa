@@ -91,21 +91,6 @@ type OpenAIClient struct {
 	inThinkingBlock bool            // Tracks if we're inside a thinking block
 }
 
-// NewOpenAIClientSimple creates an OpenAI-compatible client with minimal parameters.
-// Useful for proxy and other lightweight consumers that don't have a full config.
-// Per-request parameters (model, maxTokens, temperature, etc.) can be passed via
-// llm.Overrides in context. httpClient may be nil to use the SDK default.
-func NewOpenAIClientSimple(apiKey, apiURL, defaultModel string, defaultMaxTokens int, httpClient *http.Client) (*OpenAIClient, error) {
-	pc := &config.LLMProviderConfig{
-		Type:      "openai",
-		APIKey:    apiKey,
-		APIURL:    apiURL,
-		Model:     defaultModel,
-		MaxTokens: defaultMaxTokens,
-	}
-	return newOpenAIClientWithHTTP(pc, httpClient)
-}
-
 // NewOpenAIClient creates a new OpenAI-compatible client from a provider config entry.
 func NewOpenAIClient(pc *config.LLMProviderConfig) (*OpenAIClient, error) {
 	return newOpenAIClientWithHTTP(pc, nil)
