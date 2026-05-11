@@ -108,6 +108,11 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Set the CSRF double-submit cookie so the SPA can include it on mutations.
+	if _, err := setCSRFCookie(w, secure); err != nil {
+		log.Printf("webd: setCSRFCookie: %v", err)
+	}
+
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
@@ -126,6 +131,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		MaxAge:   -1,
 	})
+	clearCSRFCookie(w)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 

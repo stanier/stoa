@@ -55,8 +55,8 @@ func NewServer(cfg *Config) (*Server, error) {
 	return s, nil
 }
 
-// Router returns the HTTP handler wrapped with security headers.
-func (s *Server) Router() http.Handler { return securityHeaders(s.mux) }
+// Router returns the HTTP handler wrapped with security headers and CSRF protection.
+func (s *Server) Router() http.Handler { return securityHeaders(csrfMiddleware(s.mux)) }
 
 // securityHeaders adds defensive HTTP headers to every response.
 func securityHeaders(next http.Handler) http.Handler {
