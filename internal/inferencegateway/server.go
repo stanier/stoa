@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -44,6 +45,38 @@ type GatewayConfig struct {
 	FallbackChain []string               `yaml:"fallback_chain"`
 	RateLimit     GatewayRateLimitConfig `yaml:"rate_limit"`
 	Webhook       WebhookConfig          `yaml:"webhook"`
+	// AllowedOrigins restricts browser CORS to the listed origins.
+	// When non-empty, only listed origins receive Access-Control-Allow-Origin.
+	// When empty, see CORSAllowAny.
+	AllowedOrigins []string `yaml:"allowed_origins"`
+	// CORSAllowAny explicitly opts into wildcard CORS ("*") when no API key
+	// auth is configured. Required when allowed_origins is empty and
+	// apikeyd_url is unset — forces the operator to make this choice
+	// deliberately. Only use on trusted/internal networks.
+	CORSAllowAny bool `yaml:"cors_allow_any"`
+}
+
+// CheckCORSConfig validates the CORS/auth combination at startup.
+//
+// Wildcard CORS with no API key auth means any website can call this gateway
+// from a browser. This is only safe on trusted networks. The function returns
+// an error unless one of these is true:
+//   - AllowedOrigins is set (CORS is restricted to known origins), or
+//   - APIKeydURL is set (all requests require a valid API key), or
+//   - CORSAllowAny is true (operator explicitly accepts the risk).
+func CheckCORSConfig(cfg Config) error {
+	if len(cfg.Gateway.AllowedOrigins) > 0 {
+		return nil
+	}
+	if cfg.APIKeydURL != "" {
+		return nil
+	}
+	if cfg.Gateway.CORSAllowAny {
+		log.Printf("inference-gateway: cors_allow_any=true — wildcard CORS with no API key auth. Only use on trusted networks.")
+		return nil
+	}
+	return fmt.Errorf("unsafe CORS config: allowed_origins is empty and no API key auth is configured. " +
+		"Set gateway.allowed_origins, configure apikeyd_url, or set gateway.cors_allow_any: true (trusted networks only)")
 }
 
 // Config is the top-level proxy configuration.
@@ -183,7 +216,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/metrics", s.metricsHandler)
 	// Health — auth-exempt for container health checks.
 	mux.HandleFunc("/healthz", s.handleHealthz)
-	return corsMiddleware(requestIDMiddleware(stripSDKHeaders(mux)))
+	return s.corsMiddleware(requestIDMiddleware(stripSDKHeaders(mux)))
 }
 
 // resolveAndStream resolves the upstream chain for model and calls fn with each
@@ -274,12 +307,35 @@ func stripSDKHeaders(next http.Handler) http.Handler {
 
 // corsMiddleware adds CORS headers and handles OPTIONS preflight requests
 // so browser-based clients (e.g. the official OpenAI JS SDK) can reach the proxy.
-func corsMiddleware(next http.Handler) http.Handler {
+//
+// When gateway.allowed_origins is empty, any origin is permitted ("*") — appropriate
+// when all clients authenticate with an API key. When the list is non-empty, only
+// listed origins receive an explicit Allow-Origin echo; unlisted origins get no CORS
+// headers and browsers will block the request.
+func (s *Server) corsMiddleware(next http.Handler) http.Handler {
+	allowedOrigins := make(map[string]bool, len(s.cfg.Gateway.AllowedOrigins))
+	for _, o := range s.cfg.Gateway.AllowedOrigins {
+		allowedOrigins[strings.TrimRight(o, "/")] = true
+	}
+	openCORS := len(allowedOrigins) == 0
+
+	const (
+		allowMethods = "GET, POST, DELETE, OPTIONS"
+		allowHeaders = "Content-Type, Authorization, x-api-key, anthropic-version, anthropic-beta"
+		exposeHeaders = "x-request-id, x-ratelimit-limit-requests, x-ratelimit-limit-tokens, x-ratelimit-remaining-requests, x-ratelimit-remaining-tokens, x-ratelimit-reset-requests, x-ratelimit-reset-tokens, retry-after, retry-after-ms"
+	)
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, anthropic-version, anthropic-beta")
-		w.Header().Set("Access-Control-Expose-Headers", "x-request-id, x-ratelimit-limit-requests, x-ratelimit-limit-tokens, x-ratelimit-remaining-requests, x-ratelimit-remaining-tokens, x-ratelimit-reset-requests, x-ratelimit-reset-tokens, retry-after, retry-after-ms")
+		origin := strings.TrimRight(r.Header.Get("Origin"), "/")
+		if openCORS {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		} else if origin != "" && allowedOrigins[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
+		w.Header().Set("Access-Control-Allow-Methods", allowMethods)
+		w.Header().Set("Access-Control-Allow-Headers", allowHeaders)
+		w.Header().Set("Access-Control-Expose-Headers", exposeHeaders)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

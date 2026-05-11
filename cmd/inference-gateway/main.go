@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/stanier/stoa/internal/inferencegateway"
 	"gopkg.in/yaml.v3"
@@ -32,6 +33,10 @@ func main() {
 	cfg, err := loadConfig(*configFile)
 	if err != nil {
 		log.Fatalf("config: %v", err)
+	}
+
+	if err := inferencegateway.CheckCORSConfig(cfg); err != nil {
+		log.Fatalf("inference-gateway: %v", err)
 	}
 
 	srv, err := inferencegateway.NewServer(cfg)
@@ -89,6 +94,15 @@ func loadConfig(path string) (inferencegateway.Config, error) {
 		log.Fatal("no config file and no INFGW_UPSTREAM_URL / INFGW_UPSTREAM_KEY set — use -config or set env vars")
 	}
 
+	var allowedOrigins []string
+	if raw := envOr("INFGW_ALLOWED_ORIGINS", ""); raw != "" {
+		for _, o := range strings.Split(raw, ",") {
+			if trimmed := strings.TrimSpace(o); trimmed != "" {
+				allowedOrigins = append(allowedOrigins, trimmed)
+			}
+		}
+	}
+
 	return inferencegateway.Config{
 		Listen:     envOr("INFGW_LISTEN", ":8080"),
 		APIKeydURL: envOr("INFGW_APIKEYD_URL", ""),
@@ -101,6 +115,10 @@ func loadConfig(path string) (inferencegateway.Config, error) {
 				DefaultModel:     model,
 				DefaultMaxTokens: maxTokens,
 			},
+		},
+		Gateway: inferencegateway.GatewayConfig{
+			AllowedOrigins: allowedOrigins,
+			CORSAllowAny:   envOr("INFGW_CORS_ALLOW_ANY", "") == "true",
 		},
 	}, nil
 }
