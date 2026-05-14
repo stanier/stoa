@@ -137,6 +137,9 @@ type Model struct {
 	agentClient agentproto.Client // non-nil in remote mode; HTTP client for GetTokens etc.
 	sessionID   string
 	agentAddr   string // base URL of agentd, e.g. "http://localhost:7777"
+
+	// Ctrl+C double-tap quit: first press arms it, second press within the window quits.
+	ctrlCPending bool
 }
 
 // PendingZulipPermission tracks a permission request sent to Zulip
@@ -498,6 +501,21 @@ func NewRemote(cfg *config.Config) (Model, error) {
 	return m, nil
 }
 
+// NewWithLocalAgent creates a Model backed by a pre-built agentproto.Client
+// (typically an agentd.LocalClient running in-process). No network address is
+// needed; the client handles session creation and event delivery directly.
+func NewWithLocalAgent(cfg *config.Config, client agentproto.Client) (Model, error) {
+	m := initialModel()
+	m.config = cfg
+	m.agentClient = client
+	// agentAddr is set to a sentinel so Init triggers the remote-mode connection
+	// path, but connectWithClient is used instead of connectToAgent.
+	m.agentAddr = "local"
+
+	m.messages = append(m.messages, chat.NewNoteMessage("Starting local agent..."))
+	return m, nil
+}
+
 // connectToAgent dials agentd: creates a session then opens the WebSocket.
 func connectToAgent(addr string, persona string, cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
@@ -516,6 +534,26 @@ func connectToAgent(addr string, persona string, cfg *config.Config) tea.Cmd {
 		conn, err := client.Connect(ctx, sessionID)
 		if err != nil {
 			return agentDisconnectedMsg{err: fmt.Errorf("connect ws: %w", err)}
+		}
+		return agentConnectedMsg{conn: conn, client: client, sessionID: sessionID}
+	}
+}
+
+// connectWithClient uses a pre-built agentproto.Client (e.g. LocalClient) to
+// create a session and open an in-process connection. Used by NewWithLocalAgent.
+func connectWithClient(client agentproto.Client, persona string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		sessionID, err := client.CreateSession(ctx, agentproto.SessionConfig{
+			Persona: persona,
+			Source:  "tui",
+		})
+		if err != nil {
+			return agentDisconnectedMsg{err: fmt.Errorf("create session: %w", err)}
+		}
+		conn, err := client.Connect(ctx, sessionID)
+		if err != nil {
+			return agentDisconnectedMsg{err: fmt.Errorf("connect: %w", err)}
 		}
 		return agentConnectedMsg{conn: conn, client: client, sessionID: sessionID}
 	}
@@ -664,7 +702,12 @@ func (m Model) Init() tea.Cmd {
 		if m.config != nil {
 			persona = m.config.UI.Persona
 		}
-		cmds = append(cmds, connectToAgent(m.agentAddr, persona, m.config))
+		if m.agentClient != nil {
+			// Pre-built client (e.g. LocalClient) — skip network dialing.
+			cmds = append(cmds, connectWithClient(m.agentClient, persona))
+		} else {
+			cmds = append(cmds, connectToAgent(m.agentAddr, persona, m.config))
+		}
 		return tea.Batch(cmds...)
 	}
 

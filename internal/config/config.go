@@ -40,7 +40,8 @@ type Config struct {
 	Gateway GatewayConfig `mapstructure:"gateway"`
 
 	// Runtime flags (not from config file)
-	EnableConnectorsFlag bool // Set by --enable-connectors flag
+	EnableConnectorsFlag bool   // Set by --enable-connectors flag
+	LoadedFrom           string // Path of the config file that was loaded; empty if none found
 }
 
 // GatewayConfig controls provider fallback and retry behaviour.
@@ -687,8 +688,8 @@ func Load() (*Config, error) {
 	v.BindEnv("slack.session_ttl", "SLACK_SESSION_TTL")
 	v.BindEnv("slack.session_file", "SLACK_SESSION_FILE")
 
-	// Config file — search /etc/stoa first (container/system install), then
-	// ~/.config/stoa (user install). First file found wins.
+	// Config file — search in priority order: system, user home, then repo-local
+	// config/ dir (convenient when running from the repo root during development).
 	v.SetConfigName("config")
 	v.SetConfigType("yaml")
 	v.AddConfigPath("/etc/stoa")
@@ -697,6 +698,8 @@ func Load() (*Config, error) {
 	if err == nil {
 		v.AddConfigPath(configDir)
 	}
+
+	v.AddConfigPath(".stoa/config") // $PWD/.stoa/config/config.yaml for per-project overrides
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -709,6 +712,7 @@ func Load() (*Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
 	}
+	cfg.LoadedFrom = v.ConfigFileUsed()
 
 	// Viper lowercases all map keys; MCP server env var names must be
 	// uppercase so the container process can find them via os.Getenv.

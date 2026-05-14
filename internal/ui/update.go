@@ -164,6 +164,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, cmd = handleAgentDisconnectedMsg(m, msg)
 	case agentEventMsg:
 		m, cmd = handleAgentEventMsg(m, msg)
+	case ctrlCResetMsg:
+		m.ctrlCPending = false
 	default:
 		cmd = nil
 	}

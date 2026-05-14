@@ -38,6 +38,9 @@ func (r *Registry) RegisterTool(tool Tool) {
 
 // GetCommand retrieves a command by name
 func (r *Registry) GetCommand(name string) (Command, bool) {
+	if r == nil {
+		return nil, false
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	cmd, ok := r.commands[name]
@@ -46,6 +49,9 @@ func (r *Registry) GetCommand(name string) (Command, bool) {
 
 // GetTool retrieves a tool by name
 func (r *Registry) GetTool(name string) (Tool, bool) {
+	if r == nil {
+		return nil, false
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	tool, ok := r.tools[name]
@@ -54,6 +60,9 @@ func (r *Registry) GetTool(name string) (Tool, bool) {
 
 // ListCommands returns all registered commands
 func (r *Registry) ListCommands() []Command {
+	if r == nil {
+		return nil
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -66,6 +75,9 @@ func (r *Registry) ListCommands() []Command {
 
 // ListTools returns all registered tools
 func (r *Registry) ListTools() []Tool {
+	if r == nil {
+		return nil
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
