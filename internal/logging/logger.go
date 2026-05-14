@@ -129,6 +129,12 @@ func logMessage(level LogLevel, message string) {
 	}
 }
 
+// IsDebug reports whether the current log level is debug, allowing callers to
+// skip expensive message formatting that would otherwise be discarded.
+func IsDebug() bool {
+	return getLevelInt(currentLevel) <= getLevelInt(LevelDebug)
+}
+
 // Convenience functions
 func Debug(args ...interface{}) {
 	logMessage(LevelDebug, fmt.Sprint(args...))

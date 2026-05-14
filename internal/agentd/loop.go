@@ -96,6 +96,20 @@ func runAgenticLoop(
 		overrides := sess.overrides
 		sess.mu.Unlock()
 
+		// Debug: dump message history shape so conversation confusion is diagnosable.
+		if logging.IsDebug() {
+			logging.Debugf("agentd: turn %d — %d msgs, %d tools (session %s)",
+				iteration+1, len(msgs), len(llmTools), sess.id)
+			for i, m := range msgs {
+				preview := m.Content
+				if len(preview) > 120 {
+					preview = preview[:120] + "…"
+				}
+				logging.Debugf("agentd:   msg[%02d] role=%-10s len=%-5d %q",
+					i, m.Role, len(m.Content), preview)
+			}
+		}
+
 		// Inject the per-user stoa-infgw_* key so inference-gateway enforces user-scoped quotas.
 		// The key is provisioned by authd at login and passed in via SessionConfig.
 		if sess.llmKey != "" {
