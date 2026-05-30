@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -588,6 +589,16 @@ func (s *Server) handleSessionSubroute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// /sessions/:id/subagents[/:agentID] — two-level path, handle before the switch.
+	if suffix == "subagents" || strings.HasPrefix(suffix, "subagents/") {
+		rest := ""
+		if len(suffix) > len("subagents/") {
+			rest = suffix[len("subagents/"):]
+		}
+		s.handleSubAgentsRoute(w, r, sess, rest)
+		return
+	}
+
 	switch suffix {
 	case "ws":
 		s.handleStream(w, r, sess)
@@ -595,6 +606,8 @@ func (s *Server) handleSessionSubroute(w http.ResponseWriter, r *http.Request) {
 		s.handleClearSession(w, r, sess)
 	case "compact":
 		s.handleCompactSession(w, r, sess)
+	case "branch":
+		s.handleBranchSession(w, r, sess)
 	case "tokens":
 		s.handleGetTokens(w, r, sess)
 	case "messages":

@@ -11,6 +11,7 @@ import (
 	"github.com/stanier/stoa/internal/app"
 	"github.com/stanier/stoa/internal/chat"
 	"github.com/stanier/stoa/internal/compaction"
+	"github.com/stanier/stoa/internal/llm"
 	"github.com/stanier/stoa/internal/logging"
 	"github.com/stanier/stoa/internal/permissions"
 )
@@ -85,6 +86,85 @@ func (c *LocalClient) ListSessions(ctx context.Context) ([]agentproto.SessionInf
 		sess.mu.Unlock()
 	}
 	return infos, nil
+}
+
+// BranchSession forks an existing session into a new one with an optional new persona/model.
+func (c *LocalClient) BranchSession(ctx context.Context, sessionID string, cfg agentproto.BranchSessionConfig) (agentproto.BranchSessionResponse, error) {
+	parent, err := c.lookupSession(sessionID)
+	if err != nil {
+		return agentproto.BranchSessionResponse{}, err
+	}
+
+	parent.mu.Lock()
+	// Snapshot messages up to the branch point (inclusive).
+	// branchPoint 0 (default) means copy everything.
+	msgs := make([]chat.Message, len(parent.messages))
+	copy(msgs, parent.messages)
+	branchPoint := nonSystemCount(parent.messages)
+	parentPersona := parent.persona
+	parent.mu.Unlock()
+
+	// Trim to requested branch point if specified.
+	if cfg.BranchPoint > 0 {
+		// Walk messages keeping the system message plus cfg.BranchPoint non-system messages.
+		var trimmed []chat.Message
+		nonSys := 0
+		for _, m := range msgs {
+			trimmed = append(trimmed, m)
+			if m.Role != "system" {
+				nonSys++
+				if nonSys >= cfg.BranchPoint {
+					break
+				}
+			}
+		}
+		msgs = trimmed
+		branchPoint = cfg.BranchPoint
+	}
+
+	persona := cfg.Persona
+	if persona == "" {
+		persona = parentPersona
+	}
+
+	newID := uuid.New().String()
+	newSess := newSession(newID, persona, parent.source, parent.userID, "", nil)
+	newSess.tracer = app.SetupTracer(c.srv.cfg, newID)
+	newSess.llmCtx = app.BuildLLMContext(
+		c.srv.cfg,
+		c.srv.skillRegistry,
+		c.srv.promptReg,
+		c.srv.personaReg,
+		persona,
+		nil,
+		c.srv.agentSkills...,
+	)
+	newSess.perSessionTools["list_tools"] = newListToolsTool(&newSess.mu, &newSess.llmCtx)
+
+	// Inject the new system prompt, then replay non-system messages from parent.
+	if newSess.llmCtx.SystemPrompt != "" {
+		newSess.messages = append(newSess.messages, systemMessage(newSess.llmCtx.SystemPrompt))
+	}
+	for _, m := range msgs {
+		if m.Role != "system" {
+			newSess.messages = append(newSess.messages, m)
+		}
+	}
+
+	// Apply model override if requested.
+	if cfg.Model != "" {
+		newSess.overrides = &llm.Overrides{Model: &cfg.Model}
+	}
+
+	c.srv.mu.Lock()
+	c.srv.sessions[newID] = newSess
+	c.srv.mu.Unlock()
+
+	c.srv.metrics.sessionsCreated.WithLabelValues(newSess.source, persona).Inc()
+	c.srv.metrics.activeSessions.WithLabelValues(newSess.source).Inc()
+	logging.Infof("agentd: local: branched session %s → %s (persona=%q, branchPoint=%d)", sessionID, newID, persona, branchPoint)
+
+	return agentproto.BranchSessionResponse{SessionID: newID, BranchPoint: branchPoint}, nil
 }
 
 // ClearSession resets the conversation history for a session, keeping the system message.
@@ -245,6 +325,51 @@ func (c *LocalClient) RestoreMessages(ctx context.Context, sessionID string, mes
 	sess.persistedMsgCount = 0
 	sess.mu.Unlock()
 	c.srv.persistSession(sess)
+	return nil
+}
+
+// ListSubAgents returns a snapshot of the live sub-agents for a session.
+func (c *LocalClient) ListSubAgents(ctx context.Context, sessionID string) ([]agentproto.SubAgentInfo, error) {
+	sess, err := c.lookupSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	sess.mu.Lock()
+	result := make([]agentproto.SubAgentInfo, 0, len(sess.subAgents))
+	for _, sa := range sess.subAgents {
+		result = append(result, agentproto.SubAgentInfo{
+			ID:      sa.id,
+			Persona: sa.persona,
+			Task:    sa.task,
+			Status:  string(sa.status),
+		})
+	}
+	sess.mu.Unlock()
+	return result, nil
+}
+
+// SpawnSubAgent starts a new sub-agent within the session and returns its ID.
+func (c *LocalClient) SpawnSubAgent(ctx context.Context, sessionID string, cfg agentproto.SpawnSubAgentConfig) (string, error) {
+	sess, err := c.lookupSession(sessionID)
+	if err != nil {
+		return "", err
+	}
+	if cfg.Persona == "" {
+		cfg.Persona = "default"
+	}
+	agentID := spawnSubAgentInSession(c.srv, sess, cfg.Persona, cfg.Task)
+	return agentID, nil
+}
+
+// KillSubAgent cancels a running sub-agent within the session.
+func (c *LocalClient) KillSubAgent(ctx context.Context, sessionID, agentID string) error {
+	sess, err := c.lookupSession(sessionID)
+	if err != nil {
+		return err
+	}
+	if !cancelSubAgentInSession(sess, agentID) {
+		return fmt.Errorf("local: sub-agent %s not found or not active", agentID)
+	}
 	return nil
 }
 

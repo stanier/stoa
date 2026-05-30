@@ -32,15 +32,34 @@ type SessionConfig struct {
 
 // SessionInfo describes an active session.
 type SessionInfo struct {
-	ID           string    `json:"id"`
-	UserID       string    `json:"user_id,omitempty"`
-	Persona      string    `json:"persona"`
-	Source       string    `json:"source"`
-	Title        string    `json:"title,omitempty"`
-	MessageCount int       `json:"message_count"`
-	ProjectID    string    `json:"project_id,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	LastActiveAt time.Time `json:"last_active_at,omitempty"`
+	ID              string    `json:"id"`
+	UserID          string    `json:"user_id,omitempty"`
+	Persona         string    `json:"persona"`
+	Source          string    `json:"source"`
+	Title           string    `json:"title,omitempty"`
+	MessageCount    int       `json:"message_count"`
+	ProjectID       string    `json:"project_id,omitempty"`
+	ParentSessionID string    `json:"parent_session_id,omitempty"`
+	BranchPoint     int       `json:"branch_point,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	LastActiveAt    time.Time `json:"last_active_at,omitempty"`
+}
+
+// BranchSessionConfig is the request body for POST /sessions/:id/branch.
+type BranchSessionConfig struct {
+	// Persona for the new session. Empty keeps the parent's persona.
+	Persona string `json:"persona,omitempty"`
+	// Model override for the new session (stored in llm_overrides). Empty keeps parent's.
+	Model string `json:"model,omitempty"`
+	// BranchPoint is the message seq index to fork at (inclusive).
+	// -1 or omitted means fork at the current end of the conversation.
+	BranchPoint int `json:"branch_point,omitempty"`
+}
+
+// BranchSessionResponse is returned by POST /sessions/:id/branch.
+type BranchSessionResponse struct {
+	SessionID   string `json:"session_id"`
+	BranchPoint int    `json:"branch_point"`
 }
 
 // CreateSessionResponse is returned by POST /sessions.

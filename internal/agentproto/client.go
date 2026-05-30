@@ -35,8 +35,20 @@ type Client interface {
 	// RestoreMessages replaces a session's non-system conversation history with the given messages.
 	RestoreMessages(ctx context.Context, sessionID string, messages []chat.Message) error
 
+	// BranchSession forks sessionID at the given point and returns the new session ID.
+	BranchSession(ctx context.Context, sessionID string, cfg BranchSessionConfig) (BranchSessionResponse, error)
+
 	// Connect attaches to a session and returns a bidirectional connection.
 	Connect(ctx context.Context, sessionID string) (ClientConn, error)
+
+	// ListSubAgents returns the live sub-agents running within a session.
+	ListSubAgents(ctx context.Context, sessionID string) ([]SubAgentInfo, error)
+
+	// SpawnSubAgent starts a new sub-agent in the session and returns its ID.
+	SpawnSubAgent(ctx context.Context, sessionID string, cfg SpawnSubAgentConfig) (string, error)
+
+	// KillSubAgent cancels a running sub-agent.
+	KillSubAgent(ctx context.Context, sessionID, agentID string) error
 
 	// Close releases resources held by the client.
 	Close() error
