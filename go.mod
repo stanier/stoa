@@ -1,6 +1,6 @@
 module github.com/stanier/stoa
 
-go 1.25.7
+go 1.25.10
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.46.0
