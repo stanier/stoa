@@ -812,6 +812,19 @@ func Load() (*Config, error) {
 		cfg.Gateway.FallbackChain = trimmed
 	}
 
+	// Expand ~ in any path fields that may have come from the config file.
+	// Viper does not expand tilde, so ~/... stays literal if set in YAML.
+	cfg.Logging.LogFile = expandTilde(cfg.Logging.LogFile)
+	cfg.Trace.Dir = expandTilde(cfg.Trace.Dir)
+	cfg.Prompts.OverrideDir = expandTilde(cfg.Prompts.OverrideDir)
+	cfg.Permissions.PolicyFile = expandTilde(cfg.Permissions.PolicyFile)
+	cfg.Permissions.AuditLogPath = expandTilde(cfg.Permissions.AuditLogPath)
+	cfg.Agentd.SessionDir = expandTilde(cfg.Agentd.SessionDir)
+	cfg.Zulip.SessionFile = expandTilde(cfg.Zulip.SessionFile)
+	cfg.Slack.SessionFile = expandTilde(cfg.Slack.SessionFile)
+	cfg.Discord.SessionFile = expandTilde(cfg.Discord.SessionFile)
+	cfg.Matrix.SessionFile = expandTilde(cfg.Matrix.SessionFile)
+
 	// Validate required fields
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -878,6 +891,20 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// expandTilde replaces a leading "~/" with the user's home directory.
+// Returns the path unchanged if it does not start with "~/" or if the
+// home directory cannot be determined.
+func expandTilde(path string) string {
+	if !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, path[2:])
 }
 
 // GetConfigDir returns the configuration directory path
