@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -48,6 +49,23 @@ func newAnthropicClientWithHTTP(pc *config.LLMProviderConfig, httpClient *http.C
 		client: client,
 		pc:     pc,
 	}, nil
+}
+
+// wrapAnthropicAuthError replaces SDK-generated credential error messages (which
+// reference ANTHROPIC_API_KEY) with messages that name the configured api_key_env.
+func (c *AnthropicClient) wrapAnthropicAuthError(err error) error {
+	keyEnv := c.pc.APIKeyEnv
+	if keyEnv == "" {
+		keyEnv = "ANTHROPIC_API_KEY"
+	}
+	var apiErr *anthropic.Error
+	if errors.As(err, &apiErr) && apiErr.StatusCode == 401 {
+		return fmt.Errorf("authentication failed for provider %q (HTTP 401): check the value of %s", c.pc.Name, keyEnv)
+	}
+	if strings.Contains(err.Error(), "no Anthropic credentials found") || strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
+		return fmt.Errorf("no API key for provider %q: set %s", c.pc.Name, keyEnv)
+	}
+	return err
 }
 
 // anthropicUserMessage builds an Anthropic user message param, including image
@@ -216,7 +234,7 @@ func (c *AnthropicClient) SendMessage(ctx context.Context, messages []chat.Messa
 	// Create message
 	message, err := c.client.Messages.New(ctx, params, sendOpts...)
 	if err != nil {
-		return "", fmt.Errorf("error creating message: %w", err)
+		return "", c.wrapAnthropicAuthError(err)
 	}
 
 	// Extract text content (tool_use blocks will be handled separately by the UI)
@@ -453,7 +471,7 @@ func (c *AnthropicClient) StreamMessage(ctx context.Context, messages []chat.Mes
 		}
 
 		if err := stream.Err(); err != nil {
-			out <- StreamChunk{Error: fmt.Errorf("streaming error: %w", err)}
+			out <- StreamChunk{Error: c.wrapAnthropicAuthError(err)}
 			return
 		}
 

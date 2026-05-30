@@ -13,8 +13,9 @@ make build-zulip-bridge # Build Zulip bridge
 make build-mcp-all      # Build all MCP server binaries
 
 # Standalone mode (TUI with embedded LLM — original mode)
+# Requires ~/.config/stoa/config.yaml with llm.providers configured (see Provider Configuration below)
 OPENAI_API_KEY=sk-... ./bin/debug/chat
-LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... ./bin/debug/chat
+ANTHROPIC_API_KEY=sk-ant-... ./bin/debug/chat
 
 # Remote mode (TUI connects to agentd)
 # 1. Start agentd daemon
@@ -120,39 +121,44 @@ docs/
 
 Provider selection, model choice, and titling options live entirely in the **YAML config** (`~/.config/stoa/config.yaml` or `config/config.yaml`). The `.env` file is only for credentials, endpoint URLs, and TLS settings.
 
+**IMPORTANT**: Providers must be defined under `llm.providers` as a list. The flat keys `llm.provider`, `llm.model`, etc. do not exist and are silently dropped by mapstructure.
+
 **Anthropic** — example YAML block:
 ```yaml
 llm:
-  provider: anthropic
-  model: claude-sonnet-4-5-20250929
-  api_key_env: ANTHROPIC_API_KEY   # which .env var holds the key
-  api_url_env: ANTHROPIC_API_URL   # which .env var holds the endpoint (omit for public API)
+  providers:
+    - name: anthropic
+      type: anthropic
+      model: claude-sonnet-4-5-20250929
+      max_tokens: 8000
+      api_key_env: ANTHROPIC_API_KEY   # which env var holds the key
+      # api_url_env: ANTHROPIC_API_URL # optional; defaults to the public endpoint
 ```
 ```bash
-# .env (credentials/endpoints only)
+# Set the env var named by api_key_env
 ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_API_URL=https://api.anthropic.com   # optional; default is the public endpoint
 ```
 
 **OpenAI** (or compatible endpoints — Together, Groq, Ollama):
 ```yaml
 llm:
-  provider: openai
-  model: gpt-4o
-  api_key_env: OPENAI_API_KEY
-  api_url_env: OPENAI_API_URL   # omit to use the public OpenAI endpoint
+  providers:
+    - name: openai
+      type: openai
+      model: gpt-4o
+      max_tokens: 4096
+      api_key_env: OPENAI_API_KEY
+      # api_url_env: OPENAI_API_URL   # omit to use the public OpenAI endpoint
 ```
 ```bash
-# .env
 OPENAI_API_KEY=sk-...
-OPENAI_API_URL=https://api.openai.com/v1
 ```
 
 **Fallback behavior**: if `api_key_env`/`api_url_env` are omitted from the YAML config, the loader falls back to `ANTHROPIC_API_KEY`/`ANTHROPIC_API_URL` (or `OPENAI_*`) automatically.
 
 ## Common Gotchas
 
-1. **Provider/model config is YAML-only**: `LLM_PROVIDER`, `ANTHROPIC_MODEL`, `OPENAI_MODEL`, `TITLING_ENABLED` are no longer read from environment variables. Set `llm.provider`, `llm.model`, and the `titling:` block in the YAML config. Only credentials (`api_key_env`), endpoints (`api_url_env`), and TLS settings belong in `.env`.
+1. **Provider/model config is YAML-only**: `LLM_PROVIDER`, `ANTHROPIC_MODEL`, `OPENAI_MODEL`, `TITLING_ENABLED` are no longer read from environment variables. Define providers under `llm.providers` (a list of `{name, type, model, api_key_env, ...}`) and the `titling:` block in the YAML config. Only credentials (`api_key_env`), endpoints (`api_url_env`), and TLS settings belong in `.env`. The flat keys `llm.provider` and `llm.model` do not exist — they are silently dropped.
 
 2. **Tool calling implementation**: Both OpenAI and Anthropic clients fully support tool calling. The `convertToolsToOpenAI()` and `convertToolsToAnthropic()` functions handle SDK-specific type conversions. Tools registered in the skills registry are automatically available to the LLM.
 
