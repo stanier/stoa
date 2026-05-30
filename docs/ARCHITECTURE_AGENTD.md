@@ -1,6 +1,8 @@
-# agentd Refactor — Architecture Design
+# agentd Architecture
 
-## Goals
+This document describes the architecture of the agentd daemon and its relationship to clients. All implementation phases are complete.
+
+## Design Goals
 
 1. **Decouple reasoning from rendering** — The TUI becomes a thin rendering client; all LLM/MCP/tool/compaction logic moves to a daemon (`agentd`).
 2. **Multiple frontends from one backend** — TUI, Zulip, Slack, or any other client connects to the same agentd over a stable protocol.
