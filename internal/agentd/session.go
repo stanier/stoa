@@ -17,6 +17,7 @@ type SubAgentStatus string
 
 const (
 	SubAgentStatusRunning   SubAgentStatus = "running"
+	SubAgentStatusWaiting   SubAgentStatus = "waiting"
 	SubAgentStatusCompleted SubAgentStatus = "completed"
 	SubAgentStatusCancelled SubAgentStatus = "cancelled"
 	SubAgentStatusError     SubAgentStatus = "error"
