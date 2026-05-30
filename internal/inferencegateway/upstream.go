@@ -232,8 +232,10 @@ func (r *Router) Resolve(model string) *Upstream {
 		}
 		if matched {
 			if up, ok := r.upstreams[route.Upstream]; ok {
+				logging.Infof("infgw: route model=%q → upstream=%q (explicit route)", model, up.Name())
 				return up
 			}
+			logging.Warnf("infgw: route pattern %q matched model %q but upstream %q not registered", route.Model, model, route.Upstream)
 		}
 	}
 	r.mu.RLock()
@@ -241,9 +243,11 @@ func (r *Router) Resolve(model string) *Upstream {
 	r.mu.RUnlock()
 	if upstreamName != "" {
 		if up, ok := r.upstreams[upstreamName]; ok {
+			logging.Infof("infgw: route model=%q → upstream=%q (model index)", model, up.Name())
 			return up
 		}
 	}
+	logging.Infof("infgw: route model=%q → upstream=%q (fallback)", model, r.fallback.Name())
 	return r.fallback
 }
 

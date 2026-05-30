@@ -23,12 +23,18 @@ import (
 	"strings"
 
 	"github.com/stanier/stoa/internal/inferencegateway"
+	"github.com/stanier/stoa/internal/logging"
 	"gopkg.in/yaml.v3"
 )
 
 func main() {
 	configFile := flag.String("config", "", "path to YAML config file")
 	flag.Parse()
+
+	logLevel := logging.LogLevel(envOr("LOG_LEVEL", "info"))
+	if err := logging.Init(logging.Config{Level: logLevel, Pretty: true}); err != nil {
+		log.Printf("warning: failed to init logger: %v", err)
+	}
 
 	cfg, err := loadConfig(*configFile)
 	if err != nil {
