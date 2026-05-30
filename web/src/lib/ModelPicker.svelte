@@ -1,5 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
+  import { apiFetch } from './utils.js'
 
   let { sessionId } = $props()
 
@@ -75,7 +76,7 @@
     isOpen = false
     query  = ''
     try {
-      await fetch(`/api/sessions/${sessionId}/config`, {
+      await apiFetch(`/api/sessions/${sessionId}/config`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider: providerName, model: modelName }),
