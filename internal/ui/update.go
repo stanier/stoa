@@ -331,13 +331,18 @@ func (m *Model) handleCommand(cmdLine string) (tea.Model, tea.Cmd) {
 	}
 
 	return m, func() tea.Msg {
+		traceFilePath := ""
+		if m.tracer != nil {
+			traceFilePath = m.tracer.FilePath()
+		}
 		state := &skills.CommandState{
-			Messages:      m.messages,
-			Config:        m.config,
-			LLMClient:     m.llmClient,
-			TraceFilePath: m.tracer.FilePath(),
-			AgentClient:   m.agentClient,
-			SessionID:     m.sessionID,
+			Messages:        m.messages,
+			Config:          m.config,
+			LLMClient:       m.llmClient,
+			TraceFilePath:   traceFilePath,
+			AgentClient:     m.agentClient,
+			SessionID:       m.sessionID,
+			AgentController: m.agentController,
 		}
 
 		result, err := cmd.Execute(context.Background(), args, state)
