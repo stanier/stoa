@@ -20,6 +20,11 @@ func (m *mockLLMClient) SendMessage(ctx context.Context, messages []chat.Message
 	return "mock response", nil
 }
 
+func (m *mockLLMClient) ListModels(_ context.Context) ([]string, error) { return nil, nil }
+func (m *mockLLMClient) ListModelInfo(_ context.Context) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+
 func (m *mockLLMClient) StreamMessage(ctx context.Context, messages []chat.Message, tools []llm.Tool) (<-chan llm.StreamChunk, error) {
 	if m.streamFunc != nil {
 		return m.streamFunc(ctx, messages, tools)

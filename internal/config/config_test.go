@@ -15,11 +15,13 @@ func TestConfig_Validate(t *testing.T) {
 			name: "valid OpenAI config",
 			config: Config{
 				LLM: LLMConfig{
-					Provider:  "openai",
-					APIKey:    "sk-test-key",
-					APIURL:    "https://api.openai.com/v1",
-					Model:     "gpt-4o",
-					MaxTokens: 4096,
+					Providers: []LLMProviderConfig{{
+						Type:      "openai",
+						APIKey:    "sk-test-key",
+						APIURL:    "https://api.openai.com/v1",
+						Model:     "gpt-4o",
+						MaxTokens: 4096,
+					}},
 				},
 			},
 			wantErr: false,
@@ -28,11 +30,13 @@ func TestConfig_Validate(t *testing.T) {
 			name: "valid Anthropic config",
 			config: Config{
 				LLM: LLMConfig{
-					Provider:  "anthropic",
-					APIKey:    "sk-ant-test-key",
-					APIURL:    "https://api.anthropic.com",
-					Model:     "claude-sonnet-4-5-20250929",
-					MaxTokens: 4096,
+					Providers: []LLMProviderConfig{{
+						Type:      "anthropic",
+						APIKey:    "sk-ant-test-key",
+						APIURL:    "https://api.anthropic.com",
+						Model:     "claude-sonnet-4-5-20250929",
+						MaxTokens: 4096,
+					}},
 				},
 			},
 			wantErr: false,
@@ -41,10 +45,12 @@ func TestConfig_Validate(t *testing.T) {
 			name: "missing API key for OpenAI",
 			config: Config{
 				LLM: LLMConfig{
-					Provider:  "openai",
-					APIKey:    "",
-					APIURL:    "https://api.openai.com/v1",
-					MaxTokens: 4096,
+					Providers: []LLMProviderConfig{{
+						Type:      "openai",
+						APIKey:    "",
+						APIURL:    "https://api.openai.com/v1",
+						MaxTokens: 4096,
+					}},
 				},
 			},
 			wantErr: true,
@@ -54,10 +60,12 @@ func TestConfig_Validate(t *testing.T) {
 			name: "missing API key for Anthropic",
 			config: Config{
 				LLM: LLMConfig{
-					Provider:  "anthropic",
-					APIKey:    "",
-					APIURL:    "https://api.anthropic.com",
-					MaxTokens: 4096,
+					Providers: []LLMProviderConfig{{
+						Type:      "anthropic",
+						APIKey:    "",
+						APIURL:    "https://api.anthropic.com",
+						MaxTokens: 4096,
+					}},
 				},
 			},
 			wantErr: true,
@@ -67,10 +75,12 @@ func TestConfig_Validate(t *testing.T) {
 			name: "missing API URL",
 			config: Config{
 				LLM: LLMConfig{
-					Provider:  "openai",
-					APIKey:    "sk-test-key",
-					APIURL:    "",
-					MaxTokens: 4096,
+					Providers: []LLMProviderConfig{{
+						Type:      "openai",
+						APIKey:    "sk-test-key",
+						APIURL:    "",
+						MaxTokens: 4096,
+					}},
 				},
 			},
 			wantErr: true,
