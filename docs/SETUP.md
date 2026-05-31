@@ -46,10 +46,20 @@ For persistent config, set `agent.address` in `~/.config/stoa/config.yaml`.
 
 Runs agentd, MCP servers, auth stack, and web UI in containers.
 
+The fastest path is the setup wizard, which generates `.env` with all secrets
+pre-filled and prints the exact migration commands to run:
+
+```bash
+./scripts/init.sh   # choose option 3
+```
+
+Or do it manually:
+
 ```bash
 # 1. Copy and fill in env
 cp .env.example .env
-# Edit .env — at minimum set ANTHROPIC_API_KEY or OPENAI_API_KEY
+# Edit .env — generate secrets with: openssl rand -hex 32
+# Store API keys as Podman secrets: ./scripts/setup-secrets.sh
 
 # 2. Build images
 make podman-build-all

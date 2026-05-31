@@ -95,10 +95,9 @@ ANTHROPIC_API_KEY=sk-ant-... LLM_PROVIDER=anthropic ./bin/debug/agentd --port 77
 AGENT_ADDRESS=http://localhost:7777 ./bin/debug/chat
 
 # Full stack in containers (agentd, webd, auth, MCP servers)
-cp .env.example .env   # fill in API keys
+./scripts/init.sh      # guided setup: generates .env, secrets, and next-step commands
 make podman-build-all
 podman-compose up -d
-# Web UI at http://localhost:8080
 ```
 
 ## Documentation
