@@ -11,10 +11,10 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -26,18 +26,18 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -47,3 +47,15 @@ jobs:
 
       - name: Build all binaries
         run: make build
+
+      - name: Package debug binaries
+        if: github.ref == 'refs/heads/dev'
+        run: tar -czf debug-binaries-${{ github.sha }}.tar.gz -C bin/debug .
+
+      - name: Upload debug binaries
+        if: github.ref == 'refs/heads/dev'
+        uses: actions/upload-artifact@v7
+        with:
+          name: debug-binaries-${{ github.sha }}
+          path: debug-binaries-${{ github.sha }}.tar.gz
+          retention-days: 14
