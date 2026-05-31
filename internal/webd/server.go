@@ -6,16 +6,12 @@
 package webd
 
 import (
-	"embed"
 	"io/fs"
 	"net/http"
 	"strings"
 
 	"github.com/gorilla/websocket"
 )
-
-//go:embed all:dist
-var staticFiles embed.FS
 
 // Server is the webd HTTP server.
 type Server struct {

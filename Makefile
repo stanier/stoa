@@ -56,9 +56,12 @@ build-mcp-all: $(addprefix build-,$(MCP_SERVERS)) ## Build all MCP server binari
 build-web: ## Build Svelte frontend into internal/webd/dist/ (required before build-webd)
 	cd web && npm run build
 
-# wire web build as a prerequisite for both debug and dist webd targets
+# webd embeds the Svelte SPA via -tags dist so go:embed fires only when dist/ exists.
 build-webd: build-web
+	mkdir -p $(DEBUG_DIR) && $(GO) build -tags dist -o $(DEBUG_DIR)/webd ./cmd/webd
+
 dist-webd: build-web
+	mkdir -p $(DIST_DIR) && $(GO) build $(DIST_FLAGS) -tags dist -o $(DIST_DIR)/webd ./cmd/webd
 
 dev: ## Build chat with race detector
 	mkdir -p $(DEBUG_DIR)
