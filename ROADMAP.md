@@ -70,6 +70,31 @@ Markdown parsing and styling runs on every chunk update with no dirty flag or re
 
 Allocates a full-length slice when filtering system messages from a list. Minor overhead in a request-handling path. Could allocate conservatively or use `slices.DeleteFunc`.
 
+### Redundant line-count calls in view rendering
+**File:** `internal/ui/view.go`
+
+Multiple `strings.Count(content, "\n")` calls per message per render pass. Cache line heights at message creation time.
+
+### Map allocated every render cycle
+**File:** `internal/ui/view.go`
+
+`m.toolResultClickZones = make(map[int]ClickZone)` allocates a new map on every render. Use `clear()` (Go 1.21+) or range-delete to reuse the existing map.
+
+### Slice appends without capacity hints in `renderAssistantContent()`
+**File:** `internal/ui/view.go`
+
+Slice appends without pre-allocated capacity cause repeated reallocations during line parsing. Pre-size with `make([]string, 0, estimatedLines)`.
+
+### Redundant type assertion on every MCP response
+**File:** `internal/mcp/client.go`
+
+`float64 → int64` type assertion normalizes JSON IDs on every response. Normalize at send time instead.
+
+### Non-blocking permission response channel send
+**File:** `internal/ui/handlers.go`
+
+Non-blocking send to the permission response channel silently drops the response if no receiver is ready (e.g., permission prompt was closed before the user responded). Should block or log the drop explicitly.
+
 ---
 
 ## Security Hardening
@@ -124,6 +149,18 @@ API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) are in `environment:` and
 
 Enforce cosign image verification for non-`:local` images via `~/.config/containers/policy.json`. Not started.
 
+### `cap_drop` + `no-new-privileges` in compose service definitions
+
+Currently set for MCP containers via `internal/mcp/transport/docker.go`. Not set in `compose.yaml` for the agentd, webd, zulip-bridge, authd, local-idp service definitions.
+
+**Fix**: Add to each long-running service in `compose.yaml`:
+```yaml
+cap_drop:
+  - ALL
+security_opt:
+  - no-new-privileges:true
+```
+
 ---
 
 ## Gateway Features
@@ -135,6 +172,16 @@ In-process `MemoryCache` (default) or Redis (multi-replica). Cache key: SHA-256 
 Config: `gateway.cache.enabled`, `gateway.cache.ttl`, `gateway.cache.max_entries`, `gateway.cache.redis_url`.
 
 Note: The `RedisCache` stub and `Cache` interface are already defined — Redis implementation is just filling in `redis.go`.
+
+### Redis shared cache
+**Decision needed**
+
+Replace the in-process `MemoryCache` with a Redis-backed cache so multiple agentd replicas share the same response cache. Only useful when running multiple replicas — single-instance deployments get full benefit from the memory cache and should not add Redis.
+
+### Streaming cache
+**Decision needed**
+
+Cache hits currently replay as a synthetic two-chunk stream (content + done), which produces correct output but TTFT of effectively 0ms. A character-by-character replay with artificial delay would mimic streaming more faithfully but adds complexity. Decision needed on whether the current replay behaviour is acceptable.
 
 ### Semantic caching
 **Decision needed**
@@ -174,7 +221,17 @@ Inspect, log, and enforce policy on MCP tool call traffic: per-user tool restric
 
 ## MCP Servers
 
-7 servers not yet started.
+### Architecture principles
+
+- **Keep servers single-purpose.** Filesystem + git + shell is already a powerful combo without merging them. Separate processes give crash isolation, independent deployment, and granular permission grants.
+- **Hook into the permission system.** `permission_adapter.go` is the right gate for destructive operations. git push, shell exec, and sql execute should require explicit user confirmation.
+- **MCP vs. Skills.** MCP makes sense when the capability benefits from process isolation, could be reused by non-Go MCP clients, has state that should persist independently, or needs to run on a different machine. Simple stateless operations are better as Skills registered directly in the skills registry.
+
+### Implemented
+
+mcp-filesystem, mcp-memory, mcp-fetch, mcp-time, mcp-diff, mcp-web-search, mcp-http, mcp-shell, mcp-trello, mcp-zulip, mcp-netbox, mcp-promql, mcp-graphql
+
+### Not yet started (7 servers)
 
 ### Tier 1 — Capability Unlocks
 
@@ -257,38 +314,113 @@ The MVP does not support encrypted rooms. To support E2EE:
 
 ## API Proxy Compliance
 
-Open items only. Priority tiers: 🔴 P1 Broken · 🟠 P2 High · 🟡 P3 Medium · 🟢 P4 Low
+Conformance of the inbound proxy endpoints against the official OpenAI, Anthropic, and Gemini API specifications.
 
-### OpenAI
+Priority tiers: 🔴 P1 Broken · 🟠 P2 High · 🟡 P3 Medium · 🟢 P4 Low  
+Status: ✅ Done · ❌ Open · 🚧 Partial
 
-| Priority | Field | Notes |
-|----------|-------|-------|
-| 🟡 P3 | `n` | Multiple completions; always returns 1 (requires fan-out) |
-| 🟡 P3 | `stream_options` | Client preference ignored; `include_usage` hardcoded upstream |
-| 🟡 P3 | Initial `content: ""` streaming delta | Some older SDK versions expect an empty opener before content |
+### OpenAI `POST /v1/chat/completions`
 
-### Anthropic
+**Request fields**
 
-| Priority | Field | Notes |
-|----------|-------|-------|
-| 🟡 P3 | `tools[].type` computer use | `"computer_20241022"` and text editor tool not handled |
+| Priority | Status | Field | Notes |
+|----------|--------|-------|-------|
+| 🔴 P1 | ✅ | `messages[].content[]` image parts | `image_url` parts (https:// and data: URIs) forwarded; `input_audio`/`file` still return 400 |
+| 🟠 P2 | ✅ | `tool_choice` | Parsed and forwarded via overrides |
+| 🟠 P2 | ✅ | `response_format` | `json_object`/`text` via SDK; `json_schema` via `SetExtraFields` |
+| 🟠 P2 | ✅ | `messages[].tool_calls[].index` | Incrementing index on streaming deltas |
+| 🟡 P3 | ✅ | `seed` | Forwarded via `params.Seed` |
+| 🟡 P3 | ❌ | `n` | Multiple completions; always returns 1 (requires fan-out) |
+| 🟡 P3 | ✅ | `parallel_tool_calls` | Forwarded via `params.ParallelToolCalls` |
+| 🟡 P3 | ❌ | `stream_options` | Client preference ignored; `include_usage` hardcoded upstream |
+| 🟢 P4 | ✅ | `user` | Forwarded via `params.User` |
+| 🟢 P4 | ✅ | `logit_bias` | Forwarded via `params.LogitBias` |
+| 🟢 P4 | ✅ | `logprobs` / `top_logprobs` | Forwarded |
 
-### Gemini
+**Response fields**
 
-| Priority | Field | Notes |
-|----------|-------|-------|
-| 🟡 P3 | `contents[].parts[].inlineData` | Returns 400; vision proxy not implemented |
-| 🟡 P3 | `candidates[].safetyRatings[]` | Types defined and deserialized; not surfaced through streaming layer |
-| 🟡 P3 | `candidates[].citationMetadata` | Types defined and deserialized; not surfaced through streaming layer |
-| 🟢 P4 | `cachedContent` | Context caching reference not implemented |
-| 🟢 P4 | `candidates[].groundingMetadata` | Google Search grounding |
-| 🟢 P4 | `promptFeedback` | Safety feedback on prompt |
+| Priority | Status | Field | Notes |
+|----------|--------|-------|-------|
+| 🟠 P2 | ✅ | `created` | `time.Now().Unix()` |
+| 🟠 P2 | ✅ | `id` | `crypto/rand` hex |
+| 🟡 P3 | ✅ | `system_fingerprint` | Present as `null`; propagated if upstream returns one |
+| 🟢 P4 | ✅ | `service_tier` | Always `"default"` |
+| 🟢 P4 | ✅ | `choices[].message.refusal` | Present as `null` |
+
+**Streaming**
+
+| Priority | Status | Issue | Notes |
+|----------|--------|-------|-------|
+| 🟠 P2 | ✅ | Tool call delta `index` field | Incrementing per tool call |
+| 🟡 P3 | ❌ | Initial `content: ""` delta | Some older SDK versions expect an empty opener before content |
+
+**Errors**
+
+| Priority | Status | Issue | Notes |
+|----------|--------|-------|-------|
+| 🟠 P2 | ✅ | `error.code` / `error.param` / `error.type` | Spec-correct shape |
+
+### Anthropic `POST /v1/messages`
+
+**Request fields**
+
+| Priority | Status | Field | Notes |
+|----------|--------|-------|-------|
+| 🔴 P1 | ✅ | `max_tokens` validation | Returns 400 when absent or ≤ 0 |
+| 🟠 P2 | ✅ | `tool_choice` | Mapped to `ToolChoiceUnionParam` |
+| 🟠 P2 | ✅ | `thinking` | Parsed and mapped to `EnableThinking`/`ThinkingBudgetTokens` |
+| 🟠 P2 | ✅ | `anthropic-version` / `anthropic-beta` headers | Accepted / forwarded |
+| 🟡 P3 | ❌ | `tools[].type` computer use | `"computer_20241022"` and text editor tool not handled |
+| 🟡 P3 | ✅ | `tools[].cache_control` | Forwarded |
+| 🟡 P3 | ✅ | `messages[].content[].cache_control` | Forwarded verbatim |
+| 🟡 P3 | ✅ | `system[].cache_control` | Forwarded verbatim |
+| 🟢 P4 | ✅ | `metadata.user_id` | Forwarded |
+
+**Streaming**
+
+| Priority | Status | Issue | Notes |
+|----------|--------|-------|-------|
+| 🔴 P1 | ✅ | Content block `index` monotonicity | State machine with `openBlock` tracking |
+| 🟠 P2 | ✅ | `message_delta` usage | Correct |
+
+### Gemini `POST /v1beta/models/{model}:generateContent`
+
+**Request fields**
+
+| Priority | Status | Field | Notes |
+|----------|--------|-------|-------|
+| 🟠 P2 | ✅ | `safetySettings[]` | Forwarded via context |
+| 🟠 P2 | ✅ | `generationConfig.responseMimeType` / `responseSchema` | Applied to gen config |
+| 🟡 P3 | 🚧 | `contents[].parts[].inlineData` | Returns 400 with clear error; proxy not yet implemented |
+| 🟢 P4 | ❌ | `cachedContent` | Context caching reference |
+
+**Response fields**
+
+| Priority | Status | Field | Notes |
+|----------|--------|-------|-------|
+| 🟡 P3 | 🚧 | `candidates[].safetyRatings[]` | Types defined; not surfaced through streaming layer |
+| 🟡 P3 | 🚧 | `candidates[].citationMetadata` | Types defined; not surfaced through streaming layer |
+| 🟢 P4 | ❌ | `candidates[].groundingMetadata` | Google Search grounding |
+| 🟢 P4 | ❌ | `promptFeedback` | Safety feedback on prompt |
 
 ### Cross-cutting
 
-| Priority | Field | Notes |
-|----------|-------|-------|
-| 🟡 P3 | Rate-limit response headers | Requires threading upstream HTTP headers through the streaming layer |
+| Priority | Status | Issue | Notes |
+|----------|--------|-------|-------|
+| 🔴 P1 | ✅ | CORS headers | `corsMiddleware` + `OPTIONS` 204 preflight |
+| 🟠 P2 | ✅ | API key auth | `apikeydclient` |
+| 🟠 P2 | ✅ | `x-request-id` response header | `requestIDMiddleware` |
+| 🟡 P3 | ❌ | Rate-limit response headers | Requires threading upstream HTTP headers through streaming layer |
+| 🟢 P4 | ✅ | `x-stainless-*` SDK telemetry headers | Stripped on inbound |
+
+### Progress summary
+
+| Dialect | P1 | P2 | P3 | P4 |
+|---------|----|----|----|----|
+| OpenAI | 0 open | 0 open | 2 open | 0 open |
+| Anthropic | 0 open | 0 open | 1 open | 0 open |
+| Gemini | 0 open | 0 open | 1 open (2 partial) | 2 open |
+| Cross-cutting | 0 open | 0 open | 1 open | 0 open |
 
 ---
 

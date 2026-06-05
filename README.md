@@ -112,7 +112,7 @@ podman-compose up -d
 - [docs/SLACK_BRIDGE.md](docs/SLACK_BRIDGE.md) — Slack bridge setup
 - [docs/DISCORD_BRIDGE.md](docs/DISCORD_BRIDGE.md) — Discord bridge setup
 - [docs/MATRIX_BRIDGE.md](docs/MATRIX_BRIDGE.md) — Matrix bridge setup
-- [docs/MCP_SERVERS_ROADMAP.md](docs/MCP_SERVERS_ROADMAP.md) — MCP server status and roadmap
+- [ROADMAP.md](ROADMAP.md) — Outstanding work: performance, security, gateway, MCP servers, bridge features
 
 ## Building
 

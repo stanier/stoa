@@ -1,6 +1,6 @@
 # Runtime Architecture
 
-How the components fit together at runtime. For deployment specifics see [CONTAINERIZATION.md](CONTAINERIZATION.md); for remaining work see [remaining/README.md](remaining/README.md).
+How the components fit together at runtime. For deployment specifics see [CONTAINERIZATION.md](CONTAINERIZATION.md); for outstanding work see [ROADMAP.md](../ROADMAP.md).
 
 ---
 

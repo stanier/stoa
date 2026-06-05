@@ -1,6 +1,6 @@
 # MCP Integration Servers — Design Reference
 
-Design and implementation notes for the third-party API integration servers. These complement the generic capability servers in `MCP_SERVERS_ROADMAP.md`.
+Design and implementation notes for the third-party API integration servers. See [ROADMAP.md](../ROADMAP.md) for the MCP server priority list and architecture principles.
 
 **Implementation status:**
 

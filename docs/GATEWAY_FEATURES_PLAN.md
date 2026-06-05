@@ -1,6 +1,8 @@
 # Gateway Feature Roadmap
 
-This document outlines a phased plan to add the four highest-value LLM gateway features to
+> **Reference doc.** Phases 1–4 described below are partially or fully implemented. For open gateway items and decision-blocked features see [ROADMAP.md](../ROADMAP.md#gateway-features).
+
+This document outlines the phased plan used to add the four highest-value LLM gateway features to
 agentd: provider fallbacks, token budgets, response caching, and provider health metrics.
 
 Priority order is intentional — each phase builds infrastructure the next one depends on.

@@ -32,4 +32,4 @@ Out of scope: vulnerabilities in upstream dependencies (report those to their ma
 
 ## Security Design Notes
 
-The project's security architecture and known hardening work in progress are documented in `docs/remaining/SECURITY.md`.
+The project's security architecture and known hardening work in progress are documented in `ROADMAP.md` under the Security Hardening section.
