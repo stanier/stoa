@@ -103,11 +103,11 @@ podman-compose --profile migrate run --rm migrate-authd authd service create zul
 ```
 
 **Critical Configuration Logic** (`internal/config/config.go:Load()`):
-1. Binds `LLM_PROVIDER` environment variable first
-2. Based on provider, conditionally binds provider-specific env vars
-3. Sets provider-specific defaults (URLs, models)
-4. Cannot use multiple `BindEnv()` calls on same config key — only last one takes effect
-5. If `agent.address` is set and `llm.api_key` is empty, LLM validation is skipped (remote mode)
+1. Provider selection and model are **YAML-only** — defined under `llm.providers` (a list). `LLM_PROVIDER`, `ANTHROPIC_MODEL`, and `OPENAI_MODEL` are **not** read from env vars and are silently ignored.
+2. API key env var defaults: `ANTHROPIC_API_KEY` for `type: anthropic`, `OPENAI_API_KEY` otherwise. Override with `api_key_env` in YAML. The env var always wins over a literal `api_key` in YAML.
+3. API URL env var defaults: `ANTHROPIC_API_URL` / `OPENAI_API_URL` (or a custom `api_url_env`). If not set, provider defaults are used.
+4. If `agent.address` is set and the default provider has no API key, LLM validation is skipped — the client connects to agentd instead of calling an LLM directly (remote mode).
+5. agentd requires either `AGENTD_AUTHD_URL` (production auth) or `AGENTD_NO_AUTH=true` (local dev only) to start; missing both is an error.
 
 **Agent Registry** (`/agents/` and `/acp/`):
 - `GET /agents` / `POST /agents` — list or create agents

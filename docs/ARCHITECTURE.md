@@ -40,8 +40,8 @@ Browser / TUI client
 
 | Binary | Role | Key env vars |
 |--------|------|-------------|
-| `chat` | Bubbletea TUI; thin client in remote mode, embedded LLM in standalone | `AGENT_ADDRESS`, `LLM_PROVIDER`, `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
-| `agentd` | Agentic loop daemon; owns LLM, MCP, sessions, permissions | `LLM_PROVIDER`, `*_API_KEY`, `AGENTD_API_KEY`, `AGENTD_AUTHD_URL`, `AGENTD_DATABASE_URL`, `DOCKER_HOST` |
+| `chat` | Bubbletea TUI; thin client in remote mode, embedded LLM in standalone | `AGENT_ADDRESS`, `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
+| `agentd` | Agentic loop daemon; owns LLM, MCP, sessions, permissions | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`, `AGENTD_API_KEY`, `AGENTD_AUTHD_URL`, `AGENTD_NO_AUTH`, `AGENTD_DATABASE_URL`, `DOCKER_HOST` |
 | `authd` | OAuth2 identity broker; issues and validates session tokens | `AUTHD_DATABASE_URL`, `AUTHD_SIGNING_KEY`, `AUTHD_EXTERNAL_URL`, `AUTHD_ALLOWED_REDIRECT_ORIGINS` |
 | `local-idp` | Local OIDC provider; argon2id passwords, account lockout | `LOCAL_IDP_DATABASE_URL`, `LOCAL_IDP_ISSUER`, `LOCAL_IDP_EXTERNAL_URL` |
 | `webd` | Web BFF; serves Svelte SPA, sets HttpOnly cookie, proxies to agentd | `WEBD_AUTHD_URL`, `WEBD_AGENTD_URL`, `WEBD_EXTERNAL_URL`, `WEBD_S3_*` |
@@ -211,7 +211,7 @@ type Session struct {
 
 ### Compaction (`internal/agentd/handlers.go:317`)
 
-Auto-triggered after each turn when estimated token count exceeds `compaction.compact_threshold` (default ~40k). The compactor summarises older messages and replaces them with a `SummaryMessage`, then emits `EventTypeCompaction` so the TUI can show a notice. Manual trigger via `POST /sessions/{id}/compact`.
+Auto-triggered after each turn when estimated token count exceeds `compaction.compact_threshold` (default 80k). The compactor summarises older messages and replaces them with a `SummaryMessage`, then emits `EventTypeCompaction` so the TUI can show a notice. Manual trigger via `POST /sessions/{id}/compact`.
 
 ### Persistence
 

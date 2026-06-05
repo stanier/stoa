@@ -36,10 +36,11 @@ func main() {
 		fmt.Println("  GET  /sessions        — list all sessions")
 		fmt.Println("  WS   /sessions/:id/ws — bidirectional WebSocket for a session")
 		fmt.Println("\nEnvironment Variables:")
-		fmt.Println("  LLM_PROVIDER       - LLM provider: openai or anthropic")
-		fmt.Println("  OPENAI_API_KEY     - OpenAI API key")
-		fmt.Println("  ANTHROPIC_API_KEY  - Anthropic API key")
+		fmt.Println("  ANTHROPIC_API_KEY  - Anthropic API key (for providers with type: anthropic in config.yaml)")
+		fmt.Println("  OPENAI_API_KEY     - OpenAI API key (for providers with type: openai in config.yaml)")
 		fmt.Println("  AGENTD_AUTHD_URL   - authd base URL for token validation (e.g. http://authd:8888)")
+		fmt.Println("  AGENTD_NO_AUTH     - set to 'true' to run without auth (local dev only)")
+		fmt.Println("\nNote: provider selection and model are set in config.yaml under llm.providers.")
 		os.Exit(0)
 	}
 

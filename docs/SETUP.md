@@ -12,13 +12,15 @@
 
 The TUI runs with an embedded LLM — no daemon needed.
 
+Provider and model are set in `~/.config/stoa/config.yaml` under `llm.providers` (see `CONTRIBUTING.md` for the full YAML schema). The API key comes from an environment variable.
+
 ```bash
 make build-chat
 
-# Anthropic
-LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... ./bin/debug/chat
+# Anthropic (config.yaml must have an entry with type: anthropic)
+ANTHROPIC_API_KEY=sk-ant-... ./bin/debug/chat
 
-# OpenAI or compatible
+# OpenAI or compatible (config.yaml must have an entry with type: openai)
 OPENAI_API_KEY=sk-... ./bin/debug/chat
 ```
 
@@ -31,8 +33,8 @@ The daemon owns all LLM/MCP/tool logic; the TUI is a thin client.
 ```bash
 make build-agentd build-chat
 
-# 1. Start agentd
-ANTHROPIC_API_KEY=sk-ant-... LLM_PROVIDER=anthropic ./bin/debug/agentd --port 7777
+# 1. Start agentd (provider configured in config.yaml)
+ANTHROPIC_API_KEY=sk-ant-... ./bin/debug/agentd --port 7777
 
 # 2. Connect TUI (no API key needed on client)
 AGENT_ADDRESS=http://localhost:7777 ./bin/debug/chat

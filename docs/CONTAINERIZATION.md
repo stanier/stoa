@@ -1,6 +1,8 @@
 # Containerization Guide for Stoa
 
-This guide covers running Stoa and its MCP servers in Docker containers for improved isolation, security, and deployment flexibility.
+> **Note:** This project uses **Podman** and `podman-compose` with `compose.yaml`. The Docker-specific examples in this document (referring to `compose.yaml`, `compose.yaml`, or the `deployments/kubernetes/` directory) are aspirational and those files do not currently exist. Use `podman-compose` and `make podman-build-all` / `make podman-push-all` for the current toolchain.
+
+This guide covers running Stoa and its MCP servers in containers for improved isolation, security, and deployment flexibility.
 
 ## Table of Contents
 
@@ -92,18 +94,18 @@ Stoa supports three MCP transport modes:
 
 ## Quick Start
 
-### 1. Build Docker Images
+### 1. Build Images
 
 ```bash
-# Build all images
-make docker-build-all
+# Build all images (uses podman)
+make podman-build-all
 
-# Or build specific images
-make docker-build-mcp-filesystem
-make docker-build-mcp-memory
+# Or build specific MCP images
+make podman-build-mcp-filesystem
+make podman-build-mcp-memory
 ```
 
-**Result**: Images tagged as `stoa-mcp-<name>:latest`
+**Result**: Images tagged as `stoa-mcp-<name>:local`
 
 ### 2. Configure MCP Servers
 
@@ -127,17 +129,17 @@ mcp:
         - /mcp/root
 ```
 
-### 3. Run with Docker Compose
+### 3. Run with Podman Compose
 
 ```bash
 # Start services
-docker-compose up -d
+podman-compose up -d
 
 # Check logs
-docker-compose logs -f chat
+podman-compose logs -f chat
 
 # Stop services
-docker-compose down
+podman-compose down
 ```
 
 ---
@@ -265,18 +267,18 @@ mcp:
 
 ```bash
 # Development cycle
-make build-mcp               # Build binary
+make build-mcp-filesystem    # Build binary
 ./bin/debug/mcp-filesystem   # Test directly
 
 # Containerization test
-make docker-build-mcp-filesystem
+make podman-build-mcp-filesystem
 # Update config to use docker transport
 ./bin/debug/chat             # Test with container
 
 # Production
 export IMAGE_TAG=v1.2.3
-make docker-build-all
-make docker-push-all
+make podman-build-all
+make podman-push-all
 ```
 
 ---
@@ -288,21 +290,20 @@ make docker-push-all
 **Use Case**: Small deployments, personal projects
 
 ```bash
-# Set environment variables
-export LLM_PROVIDER=anthropic
+# Set environment variables (provider is selected in config.yaml, not via env)
 export ANTHROPIC_API_KEY=sk-ant-...
 export DOCKER_REGISTRY=ghcr.io/stanier
 
 # Build and push images
-make docker-build-all
-make docker-push-all
+make podman-build-all
+make podman-push-all
 
 # Start services
-docker-compose up -d
+podman-compose up -d
 
 # Check health
-docker-compose ps
-docker-compose logs -f server
+podman-compose ps
+podman-compose logs -f agentd
 ```
 
 **Persistent Data**:
@@ -314,13 +315,13 @@ docker-compose logs -f server
 
 **Use Case**: Production deployments, scaling, monitoring
 
-See [Kubernetes README](../deployments/kubernetes/README.md) for details.
+> **Not yet implemented.** Kubernetes manifests (`deployments/kubernetes/`) do not exist in the repository. The section below describes the intended design.
 
-**Steps**:
-1. Update secrets in `deployments/kubernetes/secrets.yaml`
-2. Update image URLs in `deployments/kubernetes/configmap.yaml`
+**Planned steps**:
+1. Create secrets in `deployments/kubernetes/secrets.yaml`
+2. Set image URLs in `deployments/kubernetes/configmap.yaml`
 3. Deploy: `kubectl apply -f deployments/kubernetes/`
-4. Monitor: `kubectl logs -n mcp-chat deployment/stoa-server -f`
+4. Monitor: `kubectl logs -n stoa deployment/agentd -f`
 
 **Features**:
 - Auto-restart on failure
@@ -442,7 +443,7 @@ docker logs stoa-docker-proxy
 
 **Check**: `docker-proxy` environment variables allow the operation
 
-**Fix**: Add to `docker-compose.yml`:
+**Fix**: Add to `compose.yaml`:
 ```yaml
 environment:
   CONTAINERS: 1  # Ensure this is set
@@ -611,9 +612,9 @@ make docker-build-all
 **5. Run with Podman Compose**:
 ```bash
 # Use Podman-specific compose file
-podman-compose -f docker-compose.podman.yml up -d
+podman-compose -f compose.yaml up -d
 
-# Or use regular docker-compose.yml with manual socket mount
+# Or use regular compose.yaml with manual socket mount
 export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock
 podman-compose up -d
 ```
@@ -665,7 +666,7 @@ make build
 **Method 2: Podman Compose**:
 ```bash
 # Start all services
-podman-compose -f docker-compose.podman.yml up -d
+podman-compose -f compose.yaml up -d
 
 # View logs
 podman-compose logs -f chat
@@ -684,7 +685,7 @@ After=podman.socket
 [Service]
 Environment=DOCKER_HOST=unix://%t/podman/podman.sock
 Environment=ANTHROPIC_API_KEY=sk-ant-...
-ExecStart=/usr/local/bin/stoa-server --config /home/user/.config/stoa/config.yaml
+ExecStart=/usr/local/bin/agentd --port 7777
 Restart=on-failure
 
 [Install]
@@ -702,7 +703,7 @@ systemctl --user status stoa.service
 **1. SELinux Labels**:
 If you encounter permission issues on RHEL/Fedora/CentOS:
 ```yaml
-# Add to docker-compose.podman.yml
+# Add to compose.yaml
 security_opt:
   - label=disable  # Development only
   # Or for production:
@@ -910,11 +911,11 @@ A: Yes, with proper security (socket proxy, resource limits, monitoring).
 A: ~10ms latency overhead, 1-2s container creation (one-time).
 
 **Q: Can I use Podman instead of Docker?**
-A: Yes! Fully supported. Set `DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock` and use `podman-compose -f docker-compose.podman.yml up`. See [Podman Support](#podman-support) section for details.
+A: Yes — Podman is the primary container runtime for this project. Set `DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock` and use `podman-compose up`. See [Podman Support](#podman-support) section for details.
 
 ---
 
 **Next Steps**:
 1. Run test suite: `./scripts/test-container-transport.sh`
-2. Try docker-compose: `docker-compose up -d`
-3. Deploy to K8s: See `deployments/kubernetes/README.md`
+2. Try podman-compose: `podman-compose up -d`
+3. Deploy to K8s: See [Kubernetes section above](#kubernetes-multi-host-high-availability) (manifests not yet in repo)

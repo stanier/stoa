@@ -1,6 +1,6 @@
 # agentd Architecture
 
-This document describes the architecture of the agentd daemon and its relationship to clients. All implementation phases are complete.
+> **Note:** This is a historical design document from the agentd refactor. It records the original goals and migration plan. All implementation phases are complete. For the current runtime architecture see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Design Goals
 
@@ -50,7 +50,7 @@ DELETE /sessions/:id            Close session
 ### WebSocket Endpoint (streaming)
 
 ```
-WS /sessions/:id/stream
+WS /sessions/:id/ws
 ```
 
 Bidirectional JSON framing over a single WebSocket connection per session.
@@ -58,8 +58,8 @@ Bidirectional JSON framing over a single WebSocket connection per session.
 #### Client → Server messages
 
 ```json
-{ "type": "send_message", "content": "Hello" }
-{ "type": "perm_response", "request_id": "req-123", "approved": true }
+{ "type": "send_message", "send_message": { "content": "Hello" } }
+{ "type": "perm_response", "perm_response": { "request_id": "req-123", "approved": true } }
 { "type": "cancel" }
 ```
 
