@@ -1,6 +1,6 @@
 # Containerization Guide for Stoa
 
-> **Note:** This project uses **Podman** and `podman-compose` with `compose.yaml`. The Docker-specific examples in this document (referring to `compose.yaml`, `compose.yaml`, or the `deployments/kubernetes/` directory) are aspirational and those files do not currently exist. Use `podman-compose` and `make podman-build-all` / `make podman-push-all` for the current toolchain.
+> **Note:** This project uses **Podman** and `podman-compose` with `compose.yaml`. Use `podman-compose` and `make podman-build-all` / `make podman-push-all` for the primary toolchain. `make docker-build-all` / `docker-push-all` targets also exist for Docker-compatible environments.
 
 This guide covers running Stoa and its MCP servers in containers for improved isolation, security, and deployment flexibility.
 
@@ -25,14 +25,13 @@ This guide covers running Stoa and its MCP servers in containers for improved is
 **Benefits:**
 - **Isolation**: Each MCP server runs in its own container with resource limits
 - **Security**: Restricted Docker API access, no privileged containers, minimal attack surface
-- **Portability**: Same config works on dev, staging, and production
-- **Scalability**: Easy to deploy to Kubernetes for high availability
+- **Portability**: Same config works on dev and production
 - **Versioning**: Pin MCP server versions, rollback easily
 
 **Use Cases:**
 - **Local Development**: Test with containers before deploying
 - **CI/CD**: Run tests in isolated environments
-- **Production**: Deploy to Kubernetes with auto-scaling and health checks
+- **Production**: Single-host deployment with podman-compose
 
 ### Transport Types
 
@@ -311,25 +310,6 @@ podman-compose logs -f agentd
 - Logs: `./data/logs`
 - MCP memory: Named volume `mcp-memory-data`
 
-### Kubernetes (Multi-Host, High Availability)
-
-**Use Case**: Production deployments, scaling, monitoring
-
-> **Not yet implemented.** Kubernetes manifests (`deployments/kubernetes/`) do not exist in the repository. The section below describes the intended design.
-
-**Planned steps**:
-1. Create secrets in `deployments/kubernetes/secrets.yaml`
-2. Set image URLs in `deployments/kubernetes/configmap.yaml`
-3. Deploy: `kubectl apply -f deployments/kubernetes/`
-4. Monitor: `kubectl logs -n stoa deployment/agentd -f`
-
-**Features**:
-- Auto-restart on failure
-- Persistent volumes for data
-- Resource limits and quotas
-- RBAC for security
-- Horizontal pod autoscaling (optional)
-
 ---
 
 ## Security
@@ -395,23 +375,11 @@ networks:
 
 ### Secrets Management
 
-**Development**:
+Pass secrets as environment variables:
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-docker-compose up
+podman-compose up -d
 ```
-
-**Production (Kubernetes)**:
-```bash
-kubectl create secret generic stoa-secrets \
-  --from-literal=anthropic-api-key=sk-ant-...
-```
-
-Or use external secrets:
-- AWS Secrets Manager
-- GCP Secret Manager
-- HashiCorp Vault
-- Sealed Secrets
 
 ---
 
@@ -559,7 +527,6 @@ Stoa fully supports **Podman** as a Docker alternative with minimal configuratio
 | Docker Transport (Go) | ✅ | ✅ | Works via `DOCKER_HOST` env var |
 | Image builds | ✅ | ✅ | Use `podman build` |
 | Compose files | ✅ | ✅ | Use `podman-compose` |
-| Kubernetes | ✅ | ✅ | Same manifests work |
 | Socket proxy | ✅ | ⚠️ | Not needed (rootless by default) |
 
 ### Quick Start with Podman
@@ -743,21 +710,6 @@ podman images
 podman image prune -a
 ```
 
-### Kubernetes with Podman
-
-Podman can generate Kubernetes manifests from running containers:
-
-```bash
-# Run container with Podman
-podman run -d --name stoa-server ...
-
-# Generate Kubernetes YAML
-podman generate kube stoa-server > stoa-deployment.yaml
-
-# Deploy to Kubernetes
-kubectl apply -f stoa-deployment.yaml
-```
-
 ### Troubleshooting Podman
 
 **Socket not found**:
@@ -840,40 +792,7 @@ docker stats $(docker ps --filter name=mcp- -q)
 docker events --filter type=container --filter event=start
 ```
 
-### CI/CD Integration
-
-```yaml
-# .github/workflows/build.yml
-- name: Build Docker images
-  run: make docker-build-all
-
-- name: Test containers
-  run: ./scripts/test-container-transport.sh
-
-- name: Push to registry
-  run: make docker-push-all
-  env:
-    DOCKER_REGISTRY: ghcr.io/${{ github.repository }}
-```
-
 ---
-
-## Migration Path
-
-### Phase 1: Parallel Mode (Current)
-- Support stdio, http, AND docker transports
-- Users choose per-server in config
-- Validate docker transport in staging
-
-### Phase 2: Docker Default (Future)
-- Recommend docker transport in docs
-- Keep stdio for local dev
-- Most production deployments use docker
-
-### Phase 3: Kubernetes Native (Long-term)
-- MCP servers as separate pods
-- Service mesh for communication
-- Full observability stack
 
 ---
 
@@ -882,7 +801,6 @@ docker events --filter type=container --filter event=start
 - [Docker SDK for Go](https://pkg.go.dev/github.com/moby/moby/client)
 - [Docker Socket Proxy](https://github.com/Tecnativa/docker-socket-proxy)
 - [MCP Specification](https://spec.modelcontextprotocol.io/)
-- [Kubernetes Best Practices](https://kubernetes.io/docs/concepts/configuration/overview/)
 
 ---
 
@@ -917,5 +835,4 @@ A: Yes — Podman is the primary container runtime for this project. Set `DOCKER
 
 **Next Steps**:
 1. Run test suite: `./scripts/test-container-transport.sh`
-2. Try podman-compose: `podman-compose up -d`
-3. Deploy to K8s: See [Kubernetes section above](#kubernetes-multi-host-high-availability) (manifests not yet in repo)
+2. Start services: `podman-compose up -d`

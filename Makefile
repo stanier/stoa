@@ -3,14 +3,20 @@
 # =============================================================================
 
 GOCACHE    := $(CURDIR)/build-cache
-DEBUG_DIR  := bin/debug
-DIST_DIR   := bin/dist
+GOOS       ?= $(shell go env GOOS)
+GOARCH     ?= $(shell go env GOARCH)
+GOARM      ?=
+CGO_ENABLED ?= 0
+DEBUG_DIR  := bin/debug/$(GOOS)_$(GOARCH)
+DIST_DIR   := bin/dist/$(GOOS)_$(GOARCH)
 VERSION    := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 DIST_FLAGS := -trimpath -ldflags="-s -w -X github.com/stanier/stoa/internal/version.Version=$(VERSION)"
-GO         := GOCACHE=$(GOCACHE) go
+GO         := GOCACHE=$(GOCACHE) CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) GOARM=$(GOARM) go
 
-DOCKER_REGISTRY ?= ghcr.io/stanier
-IMAGE_TAG       ?= latest
+EXE              := $(if $(filter windows,$(GOOS)),.exe,)
+DOCKER_REGISTRY  ?= ghcr.io/stanier
+IMAGE_TAG        ?= latest
+DOCKER_PLATFORM  ?= linux/$(GOARCH)
 
 # All binaries — name matches ./cmd/<name> and bin/debug/<name>
 BINARIES    := chat stoa mcp-filesystem mcp-memory dump-context mcp-time mcp-fetch mcp-attachments mcp-diff mcp-web-search mcp-http mcp-graphql mcp-netbox mcp-promql mcp-zulip mcp-shell mcp-trello mcp-knowledgebase mcp-acp agentd auth-admin authd local-idp webd zulip-bridge slack-bridge discord-bridge matrix-bridge cli-bridge inference-gateway apikeyd pii-filter
@@ -23,11 +29,11 @@ MCP_SERVERS := mcp-filesystem mcp-memory mcp-time mcp-fetch mcp-attachments mcp-
 # =============================================================================
 
 define go-build
-mkdir -p $(DEBUG_DIR) && $(GO) build -o $(DEBUG_DIR)/$(1) ./cmd/$(1)
+mkdir -p $(DEBUG_DIR) && $(GO) build -o $(DEBUG_DIR)/$(1)$(EXE) ./cmd/$(1)
 endef
 
 define go-dist
-mkdir -p $(DIST_DIR) && $(GO) build $(DIST_FLAGS) -o $(DIST_DIR)/$(1) ./cmd/$(1)
+mkdir -p $(DIST_DIR) && $(GO) build $(DIST_FLAGS) -o $(DIST_DIR)/$(1)$(EXE) ./cmd/$(1)
 endef
 
 # Generates build-<name> and dist-<name> for every entry in BINARIES
@@ -58,10 +64,10 @@ build-web: ## Build Svelte frontend into internal/webd/dist/ (required before bu
 
 # webd embeds the Svelte SPA via -tags dist so go:embed fires only when dist/ exists.
 build-webd: build-web
-	mkdir -p $(DEBUG_DIR) && $(GO) build -tags dist -o $(DEBUG_DIR)/webd ./cmd/webd
+	mkdir -p $(DEBUG_DIR) && $(GO) build -tags dist -o $(DEBUG_DIR)/webd$(EXE) ./cmd/webd
 
 dist-webd: build-web
-	mkdir -p $(DIST_DIR) && $(GO) build $(DIST_FLAGS) -tags dist -o $(DIST_DIR)/webd ./cmd/webd
+	mkdir -p $(DIST_DIR) && $(GO) build $(DIST_FLAGS) -tags dist -o $(DIST_DIR)/webd$(EXE) ./cmd/webd
 
 dev: ## Build chat with race detector
 	mkdir -p $(DEBUG_DIR)
@@ -117,15 +123,19 @@ lint: ## Lint code (requires golangci-lint)
 	golangci-lint run
 
 upx: dist-chat  ## Compress chat binary with UPX (~50-70% smaller, slower startup)
-	@if command -v upx >/dev/null 2>&1; then \
+	@if [ "$(GOARCH)" != "amd64" ] && [ "$(GOARCH)" != "386" ]; then \
+		echo "UPX is not reliable on $(GOARCH), skipping"; \
+	elif command -v upx >/dev/null 2>&1; then \
 		upx --best --lzma $(DIST_DIR)/chat; \
 	else \
 		echo "UPX not found. Install with: sudo apt-get install upx-ucl"; \
 		exit 1; \
 	fi
 
-upx-all: dist-all ## Compress all dist binaries with UPX
-	@if command -v upx >/dev/null 2>&1; then \
+upx-all: dist ## Compress all dist binaries with UPX
+	@if [ "$(GOARCH)" != "amd64" ] && [ "$(GOARCH)" != "386" ]; then \
+		echo "UPX is not reliable on $(GOARCH), skipping"; \
+	elif command -v upx >/dev/null 2>&1; then \
 		upx --best --lzma $(DIST_DIR)/*; \
 	else \
 		echo "UPX not found. Install with: sudo apt-get install upx-ucl"; \
@@ -150,11 +160,11 @@ docker-build-all: docker-build-chat docker-build-mcp-all ## Build all Docker ima
 docker-build-mcp-all: $(addprefix docker-build-,$(MCP_SERVERS)) ## Build all MCP server Docker images
 
 docker-build-chat: ## Build chat TUI Docker image
-	docker build --target chat -t $(DOCKER_REGISTRY)/stoa:$(IMAGE_TAG) -t $(DOCKER_REGISTRY)/stoa:latest .
+	docker build --platform $(DOCKER_PLATFORM) --target chat -t $(DOCKER_REGISTRY)/stoa:$(IMAGE_TAG) -t $(DOCKER_REGISTRY)/stoa:latest .
 
 
 $(addprefix docker-build-,$(MCP_SERVERS)): docker-build-%:
-	docker build --target $* -t $(DOCKER_REGISTRY)/stoa-$*:$(IMAGE_TAG) -t $(DOCKER_REGISTRY)/stoa-$*:latest .
+	docker build --platform $(DOCKER_PLATFORM) --target $* -t $(DOCKER_REGISTRY)/stoa-$*:$(IMAGE_TAG) -t $(DOCKER_REGISTRY)/stoa-$*:latest .
 
 docker-push-all: ## Push all images to registry
 	docker push $(DOCKER_REGISTRY)/stoa:$(IMAGE_TAG)
@@ -190,14 +200,14 @@ podman-build-all: $(addprefix podman-build-,$(SERVICES)) podman-build-mcp-all ##
 podman-build-mcp-all: $(addprefix podman-build-,$(MCP_SERVERS)) ## Build all MCP server images tagged :local
 
 $(addprefix podman-build-,$(SERVICES)): podman-build-%:
-	podman build --target $* -t $*:local .
+	podman build --platform $(DOCKER_PLATFORM) --target $* -t $*:local .
 
 # podman-rebuild-<name>: force rebuild without layer cache (use after Go source changes)
 $(addprefix podman-rebuild-,$(SERVICES)): podman-rebuild-%:
-	podman build --no-cache --target $* -t $*:local .
+	podman build --no-cache --platform $(DOCKER_PLATFORM) --target $* -t $*:local .
 
 $(addprefix podman-build-,$(MCP_SERVERS)): podman-build-%:
-	podman build --target $* -t $*:local .
+	podman build --platform $(DOCKER_PLATFORM) --target $* -t $*:local .
 
 podman-compose-up: ## Start services with podman-compose (no rebuild)
 	podman-compose -f docker-compose.podman.yml up -d

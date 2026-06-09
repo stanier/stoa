@@ -12,10 +12,7 @@ Welcome to the Stoa documentation repository. This directory contains guides and
 ## Technical Reference
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) - **Runtime architecture**: component map, request lifecycle, auth flow, MCP lifecycle
-- [ARCHITECTURE_AGENTD.md](ARCHITECTURE_AGENTD.md) - Historical design doc: agentd + thin TUI split
-- [MCP_FILESYSTEM_SERVER.md](MCP_FILESYSTEM_SERVER.md) - MCP filesystem server reference
-- [MCP_INTEGRATIONS_PLAN.md](MCP_INTEGRATIONS_PLAN.md) - Third-party API server design notes
-- [GATEWAY_FEATURES_PLAN.md](GATEWAY_FEATURES_PLAN.md) - Gateway implementation phases 1–4 (reference)
+- [MCP_INTEGRATIONS_PLAN.md](MCP_INTEGRATIONS_PLAN.md) - Third-party API server design notes (includes `mcp-gitlab` spec)
 - [CONTAINERIZATION.md](CONTAINERIZATION.md) - Docker/Podman containerization guide
 - [PODMAN.md](PODMAN.md) - Podman quick-start
 - [BINARY_SIZE_OPTIMIZATION.md](BINARY_SIZE_OPTIMIZATION.md) - Build size optimization reference
