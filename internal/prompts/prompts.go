@@ -9,6 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	// text/template is intentional here — prompt output goes to the LLM, not an HTML
+	// renderer. html/template would HTML-escape < > & " in prompt content, corrupting
+	// LLM instructions. Template data is system-controlled (model, tools, date); no
+	// user input flows into these templates.
 	"text/template"
 
 	"gopkg.in/yaml.v3"

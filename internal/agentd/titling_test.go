@@ -31,6 +31,9 @@ func (c *captureClient) StreamMessage(_ context.Context, _ []chat.Message, _ []l
 }
 
 func (c *captureClient) ListModels(_ context.Context) ([]string, error) { return nil, nil }
+func (c *captureClient) ListModelInfo(_ context.Context) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
 
 func newTitlingServer(client llm.Client, model string) *Server {
 	return &Server{
@@ -54,7 +57,7 @@ func TestGenerateTitle_SimpleConversation(t *testing.T) {
 		{Role: "assistant", Content: "The capital of France is Paris."},
 	}
 
-	title := s.generateTitle(context.Background(), msgs)
+	title := s.generateTitle(context.Background(), msgs, "")
 	if title != "Hello World" {
 		t.Errorf("unexpected title: %q", title)
 	}
@@ -79,7 +82,7 @@ func TestGenerateTitle_FiltersToolMessages(t *testing.T) {
 		{Role: "assistant", Content: "Sure, let me retry."},
 	}
 
-	s.generateTitle(context.Background(), msgs)
+	s.generateTitle(context.Background(), msgs, "")
 
 	if len(cap.captured) != 1 {
 		t.Fatalf("expected 1 call, got %d", len(cap.captured))
@@ -110,7 +113,7 @@ func TestGenerateTitle_MaxContextWindow(t *testing.T) {
 		)
 	}
 
-	s.generateTitle(context.Background(), msgs)
+	s.generateTitle(context.Background(), msgs, "")
 
 	sent := cap.captured[0]
 	printMessages(t, "long conversation (20 turns, expecting ≤8 messages sent)", sent)
@@ -131,7 +134,7 @@ func TestGenerateTitle_AttachmentMessagesIncluded(t *testing.T) {
 		{Role: "assistant", Content: "I'll summarize the report for you."},
 	}
 
-	s.generateTitle(context.Background(), msgs)
+	s.generateTitle(context.Background(), msgs, "")
 
 	sent := cap.captured[0]
 	printMessages(t, "conversation with attachment", sent)

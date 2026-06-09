@@ -25,6 +25,8 @@ func SetupSkillRegistry(cfg *config.Config, commandPrefix string) *skills.Regist
 	registry.RegisterCommand(builtin.NewCompactCommand())
 	registry.RegisterCommand(builtin.NewTokensCommand())
 	registry.RegisterCommand(builtin.NewModelCommand())
+	registry.RegisterCommand(builtin.NewPersonaCommand())
+	registry.RegisterCommand(builtin.NewExitCommand())
 
 	if cfg != nil {
 		for _, toolName := range cfg.Skills.EnabledBuiltin {

@@ -151,6 +151,12 @@ func handleCommandExecutedMsg(m Model, msg commandExecutedMsg) (Model, tea.Cmd) 
 				} else if visStr, ok := metadata["panel_visible"].(string); ok && visStr == "toggle" {
 					m.showAgentPanel = !m.showAgentPanel
 				}
+			case "quit":
+				return m, m.quit()
+			case "branch_session":
+				if newID, ok := metadata["session_id"].(string); ok && newID != "" {
+					return m.reconnectToSession(newID, msg.result.Message)
+				}
 			case "show_panel_on_first_spawn":
 				if m.firstSpawnSinceLaunch && m.agentManager != nil {
 					panelVisibilityChanged = true
@@ -168,11 +174,11 @@ func handleCommandExecutedMsg(m Model, msg commandExecutedMsg) (Model, tea.Cmd) 
 			m.lastTurnOutputTokens = 0
 		}
 		if msg.result.Message != "" {
-			m.messages = append(m.messages, chat.NewSystemMessage(msg.result.Message))
+			m.messages = append(m.messages, chat.NewNoteMessage(msg.result.Message))
 		}
 	} else {
 		m.err = fmt.Errorf("%s", msg.result.Message)
-		m.messages = append(m.messages, chat.NewSystemMessage(fmt.Sprintf("Error: %s", msg.result.Message)))
+		m.messages = append(m.messages, chat.NewNoteMessage(fmt.Sprintf("Error: %s", msg.result.Message)))
 	}
 
 	if panelVisibilityChanged {

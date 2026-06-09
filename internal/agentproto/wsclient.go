@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 
@@ -49,6 +50,7 @@ func NewWSClientWithToken(baseURL, token string) *WSClient {
 func NewWSClientWithOptions(baseURL, token string, tlsSkipVerify bool) *WSClient {
 	var httpClient *http.Client
 	if tlsSkipVerify {
+		log.Printf("agentproto: WARNING: TLS certificate verification disabled for %s — do not use in production", baseURL)
 		httpClient = &http.Client{
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
@@ -154,6 +156,37 @@ func (c *WSClient) ClearSession(ctx context.Context, sessionID string) error {
 	return nil
 }
 
+// BranchSession calls POST /sessions/:id/branch to fork a session.
+func (c *WSClient) BranchSession(ctx context.Context, sessionID string, cfg BranchSessionConfig) (BranchSessionResponse, error) {
+	body, err := json.Marshal(cfg)
+	if err != nil {
+		return BranchSessionResponse{}, fmt.Errorf("agentproto: marshal branch config: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/sessions/"+sessionID+"/branch", bytes.NewReader(body))
+	if err != nil {
+		return BranchSessionResponse{}, fmt.Errorf("agentproto: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuth(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return BranchSessionResponse{}, fmt.Errorf("agentproto: POST /sessions/%s/branch: %w", sessionID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		return BranchSessionResponse{}, fmt.Errorf("agentproto: branch session returned %d: %s", resp.StatusCode, string(data))
+	}
+
+	var result BranchSessionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return BranchSessionResponse{}, fmt.Errorf("agentproto: decode branch response: %w", err)
+	}
+	return result, nil
+}
+
 // CompactSession calls POST /sessions/:id/compact to trigger manual compaction.
 func (c *WSClient) CompactSession(ctx context.Context, sessionID string) (CompactResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/sessions/"+sessionID+"/compact", nil)
@@ -257,6 +290,87 @@ func (c *WSClient) RestoreMessages(ctx context.Context, sessionID string, messag
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		data, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("agentproto: restore messages returned %d: %s", resp.StatusCode, string(data))
+	}
+	return nil
+}
+
+// ListSubAgents calls GET /sessions/:id/subagents and returns the live sub-agents.
+func (c *WSClient) ListSubAgents(ctx context.Context, sessionID string) ([]SubAgentInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/sessions/"+sessionID+"/subagents", nil)
+	if err != nil {
+		return nil, fmt.Errorf("agentproto: build request: %w", err)
+	}
+	c.setAuth(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("agentproto: GET /sessions/%s/subagents: %w", sessionID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("agentproto: list subagents returned %d: %s", resp.StatusCode, string(data))
+	}
+
+	var result []SubAgentInfo
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("agentproto: decode subagents response: %w", err)
+	}
+	return result, nil
+}
+
+// SpawnSubAgent calls POST /sessions/:id/subagents to start a new sub-agent.
+func (c *WSClient) SpawnSubAgent(ctx context.Context, sessionID string, cfg SpawnSubAgentConfig) (string, error) {
+	body, err := json.Marshal(cfg)
+	if err != nil {
+		return "", fmt.Errorf("agentproto: marshal spawn config: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/sessions/"+sessionID+"/subagents", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("agentproto: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuth(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("agentproto: POST /sessions/%s/subagents: %w", sessionID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("agentproto: spawn subagent returned %d: %s", resp.StatusCode, string(data))
+	}
+
+	var result struct {
+		AgentID string `json:"agent_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("agentproto: decode spawn response: %w", err)
+	}
+	return result.AgentID, nil
+}
+
+// KillSubAgent calls DELETE /sessions/:id/subagents/:agentID to cancel a sub-agent.
+func (c *WSClient) KillSubAgent(ctx context.Context, sessionID, agentID string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+"/sessions/"+sessionID+"/subagents/"+agentID, nil)
+	if err != nil {
+		return fmt.Errorf("agentproto: build request: %w", err)
+	}
+	c.setAuth(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("agentproto: DELETE /sessions/%s/subagents/%s: %w", sessionID, agentID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("agentproto: kill subagent returned %d: %s", resp.StatusCode, string(data))
 	}
 	return nil
 }

@@ -1,18 +1,16 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/stanier/stoa/internal/agentd"
 	"github.com/stanier/stoa/internal/config"
+	"github.com/stanier/stoa/internal/daemon"
 	"github.com/stanier/stoa/internal/logging"
 )
 
@@ -38,10 +36,11 @@ func main() {
 		fmt.Println("  GET  /sessions        — list all sessions")
 		fmt.Println("  WS   /sessions/:id/ws — bidirectional WebSocket for a session")
 		fmt.Println("\nEnvironment Variables:")
-		fmt.Println("  LLM_PROVIDER       - LLM provider: openai or anthropic")
-		fmt.Println("  OPENAI_API_KEY     - OpenAI API key")
-		fmt.Println("  ANTHROPIC_API_KEY  - Anthropic API key")
+		fmt.Println("  ANTHROPIC_API_KEY  - Anthropic API key (for providers with type: anthropic in config.yaml)")
+		fmt.Println("  OPENAI_API_KEY     - OpenAI API key (for providers with type: openai in config.yaml)")
 		fmt.Println("  AGENTD_AUTHD_URL   - authd base URL for token validation (e.g. http://authd:8888)")
+		fmt.Println("  AGENTD_NO_AUTH     - set to 'true' to run without auth (local dev only)")
+		fmt.Println("\nNote: provider selection and model are set in config.yaml under llm.providers.")
 		os.Exit(0)
 	}
 
@@ -66,7 +65,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	agentd.WarnIfNoAuth(os.Getenv("AGENTD_AUTHD_URL"))
+	if err := agentd.CheckAuthConfig(os.Getenv("AGENTD_AUTHD_URL"), os.Getenv("AGENTD_NO_AUTH")); err != nil {
+		logging.Errorf("agentd: %v", err)
+		os.Exit(1)
+	}
 
 	// Resolve TLS cert/key paths.
 	if *tlsFlag && *certFile == "" {
@@ -95,29 +97,11 @@ func main() {
 		Handler: handler,
 	}
 
-	go func() {
-		if *tlsFlag {
-			logging.Infof("agentd: listening on %s (TLS)", addr)
-			if err := httpSrv.ListenAndServeTLS(*certFile, *keyFile); err != nil && err != http.ErrServerClosed {
-				logging.Errorf("agentd: HTTPS server error: %v", err)
-				os.Exit(1)
-			}
-		} else {
-			logging.Infof("agentd: listening on %s (plaintext)", addr)
-			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				logging.Errorf("agentd: HTTP server error: %v", err)
-				os.Exit(1)
-			}
-		}
-	}()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	<-sigCh
-
-	logging.Info("agentd: shutting down, draining active connections (60s)")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	_ = httpSrv.Shutdown(shutdownCtx)
+	if *tlsFlag {
+		logging.Infof("agentd: listening on %s (TLS)", addr)
+	} else {
+		logging.Infof("agentd: listening on %s (plaintext)", addr)
+	}
+	daemon.ServeHTTP("agentd", httpSrv, 60*time.Second, *certFile, *keyFile)
 	srv.Stop()
 }

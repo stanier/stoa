@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"log"
 	"os"
@@ -17,14 +16,13 @@ const (
 )
 
 func main() {
+	f               := mcpserver.RegisterCommonFlags()
 	defaultEndpoint := flag.String("endpoint", envStr("ACP_ENDPOINT", ""), "Default ACP base URL (overridden per-call)")
 	apiKey          := flag.String("api-key", envStr("ACP_API_KEY", ""), "Bearer token for authenticated ACP endpoints")
 	timeoutSecs     := flag.Int("timeout", envInt("ACP_TIMEOUT", 120), "HTTP request timeout in seconds")
-	logFile         := flag.String("log", "", "Log file path (empty for stderr)")
-	pingTimeout     := flag.Duration("ping-timeout", 0, "Shut down if no ping received within this duration (0 = disabled)")
 	flag.Parse()
 
-	mcpserver.SetupLogging(*logFile)
+	mcpserver.SetupLogging(*f.LogFile)
 	log.Printf("Starting %s v%s", serverName, serverVersion)
 
 	if *defaultEndpoint != "" {
@@ -39,10 +37,7 @@ func main() {
 		APIKey:          *apiKey,
 		TimeoutSecs:     *timeoutSecs,
 	}
-	srv := acpclient.NewServer(serverName, serverVersion, cfg)
-	if err := mcpserver.RunServer(context.Background(), srv, *pingTimeout); err != nil {
-		log.Fatalf("Server error: %v", err)
-	}
+	mcpserver.Serve(acpclient.NewServer(serverName, serverVersion, cfg), f)
 }
 
 func envStr(key, def string) string {

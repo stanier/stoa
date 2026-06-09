@@ -41,7 +41,7 @@ func (d *DB) InsertMessages(ctx context.Context, sessionID string, msgs []chat.M
 // GetMessages returns all non-system messages for a session in seq order.
 func (d *DB) GetMessages(ctx context.Context, sessionID string) ([]chat.Message, error) {
 	const q = `
-		SELECT role, content, thinking, tool_name, tool_use_id, tool_success
+		SELECT role, content, thinking, tool_name, tool_use_id, tool_success, created_at
 		FROM agentd_messages
 		WHERE session_id=$1
 		ORDER BY seq ASC`
@@ -55,7 +55,7 @@ func (d *DB) GetMessages(ctx context.Context, sessionID string) ([]chat.Message,
 	for rows.Next() {
 		var m chat.Message
 		var role string
-		if err := rows.Scan(&role, &m.Content, &m.Thinking, &m.ToolName, &m.ToolUseID, &m.ToolSuccess); err != nil {
+		if err := rows.Scan(&role, &m.Content, &m.Thinking, &m.ToolName, &m.ToolUseID, &m.ToolSuccess, &m.Timestamp); err != nil {
 			return nil, fmt.Errorf("agentdb: scan message: %w", err)
 		}
 		m.Role = chat.Role(role)

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"log"
 	"time"
@@ -16,16 +15,15 @@ const (
 )
 
 func main() {
+	f             := mcpserver.RegisterCommonFlags()
 	baseURL       := flag.String("base-url", "", "Zulip server URL, e.g. https://yourorg.zulipchat.com (required)")
 	email         := flag.String("email", "", "Bot email address (required)")
 	apiKey        := flag.String("api-key", "", "Bot API key (required)")
 	timeoutSecs   := flag.Int("timeout", 30, "HTTP timeout seconds")
-	logFile       := flag.String("log", "", "Log file path (default: stderr)")
-	pingTimeoutS  := flag.Int("ping-timeout", 0, "Ping watchdog timeout seconds, 0=disabled")
 	attachmentDir := flag.String("attachment-dir", "/mcp/root/attachments", "Directory to save downloaded attachments")
 	flag.Parse()
 
-	mcpserver.SetupLogging(*logFile)
+	mcpserver.SetupLogging(*f.LogFile)
 	log.Printf("Starting %s v%s", serverName, serverVersion)
 	if *baseURL == "" {
 		log.Fatal("-base-url is required (e.g. https://yourorg.zulipchat.com)")
@@ -50,7 +48,5 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create Zulip server: %v", err)
 	}
-	if err := mcpserver.RunServer(context.Background(), srv, time.Duration(*pingTimeoutS)*time.Second); err != nil {
-		log.Fatalf("Server error: %v", err)
-	}
+	mcpserver.Serve(srv, f)
 }

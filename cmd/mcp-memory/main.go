@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"log"
 
@@ -15,13 +14,12 @@ const (
 )
 
 func main() {
+	f           := mcpserver.RegisterCommonFlags()
 	storagePath := flag.String("storage", "", "Path to memory storage file (default: ~/.config/stoa/memory.json)")
 	maxEntries  := flag.Int("max-entries", 10000, "Maximum number of memory entries (0 for unlimited)")
-	logFile     := flag.String("log", "", "Log file path (empty for stderr)")
-	pingTimeout := flag.Duration("ping-timeout", 0, "Shut down if no ping received within this duration (0 = disabled)")
 	flag.Parse()
 
-	mcpserver.SetupLogging(*logFile)
+	mcpserver.SetupLogging(*f.LogFile)
 	log.Printf("Starting %s v%s", serverName, serverVersion)
 	if *storagePath != "" {
 		log.Printf("Storage: %s", *storagePath)
@@ -38,8 +36,5 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create memory server: %v", err)
 	}
-
-	if err := mcpserver.RunServer(context.Background(), memServer, *pingTimeout); err != nil {
-		log.Fatalf("Server error: %v", err)
-	}
+	mcpserver.Serve(memServer, f)
 }

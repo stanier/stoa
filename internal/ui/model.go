@@ -73,7 +73,8 @@ type Model struct {
 	lastTurnOutputTokens int
 
 	// Skills
-	skillRegistry *skills.Registry
+	skillRegistry   *skills.Registry
+	agentController skills.AgentController // nil until agent management is available
 
 	// Prompts
 	promptRegistry *prompts.Registry
@@ -137,6 +138,9 @@ type Model struct {
 	agentClient agentproto.Client // non-nil in remote mode; HTTP client for GetTokens etc.
 	sessionID   string
 	agentAddr   string // base URL of agentd, e.g. "http://localhost:7777"
+
+	// Ctrl+C double-tap quit: first press arms it, second press within the window quits.
+	ctrlCPending bool
 }
 
 // PendingZulipPermission tracks a permission request sent to Zulip
@@ -230,9 +234,9 @@ func setupMCPManager(cfg *config.Config, skillRegistry *skills.Registry, permSet
 	return manager, readyChan
 }
 
-func setupAgentManager(cfg *config.Config, llmClient llm.Client, skillRegistry *skills.Registry, promptRegistry *prompts.Registry) (*agents.Manager, *personas.Registry, chan tea.Msg, func()) {
+func setupAgentManager(cfg *config.Config, llmClient llm.Client, skillRegistry *skills.Registry, promptRegistry *prompts.Registry) (*agents.Manager, *agents.ManagerController, *personas.Registry, chan tea.Msg, func()) {
 	if cfg == nil || !cfg.Agents.Enabled || llmClient == nil {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 
 	agentManager := agents.NewManagerWithConfig(llmClient, skillRegistry, promptRegistry, cfg, cfg.Agents.MaxConcurrent)
@@ -240,11 +244,13 @@ func setupAgentManager(cfg *config.Config, llmClient llm.Client, skillRegistry *
 	personaRegistry := app.SetupPersonaRegistry()
 	agentManager.SetPersonaRegistry(personaRegistry)
 
+	controller := agents.NewManagerController(agentManager)
+
 	agentMsgChan := make(chan tea.Msg, 100)
 
-	skillRegistry.RegisterCommand(builtin.NewSpawnCommand(agentManager))
-	skillRegistry.RegisterCommand(builtin.NewAgentsCommand(agentManager))
-	skillRegistry.RegisterCommand(builtin.NewKillCommand(agentManager))
+	skillRegistry.RegisterCommand(builtin.NewSpawnCommand())
+	skillRegistry.RegisterCommand(builtin.NewAgentsCommand())
+	skillRegistry.RegisterCommand(builtin.NewKillCommand())
 
 	msgChan, unsubscribe := agentManager.Subscribe()
 	go func() {
@@ -269,7 +275,7 @@ func setupAgentManager(cfg *config.Config, llmClient llm.Client, skillRegistry *
 		}
 	}()
 
-	return agentManager, personaRegistry, agentMsgChan, unsubscribe
+	return agentManager, controller, personaRegistry, agentMsgChan, unsubscribe
 }
 
 func setupMarkdownRenderer() *MarkdownRenderer {
@@ -329,7 +335,7 @@ func NewWithConfig(cfg *config.Config) Model {
 	compactor := setupCompaction(cfg, llmClient, tokenCounter, promptRegistry)
 	permSetup := app.SetupPermissions(cfg)
 	mcpManager, mcpReadyChan := setupMCPManager(cfg, skillRegistry, permSetup)
-	agentManager, personaRegistry, agentMsgChan, agentUnsubscribe := setupAgentManager(cfg, llmClient, skillRegistry, promptRegistry)
+	agentManager, agentCtrl, personaRegistry, agentMsgChan, agentUnsubscribe := setupAgentManager(cfg, llmClient, skillRegistry, promptRegistry)
 	mdRenderer := setupMarkdownRenderer()
 
 	zulipMsgChan := make(chan tea.Msg, 10)
@@ -352,6 +358,7 @@ func NewWithConfig(cfg *config.Config) Model {
 		tokenCountDirty:         true,
 		tokenCountCache:         make(map[string]int),
 		skillRegistry:           skillRegistry,
+		agentController:         agentCtrl,
 		promptRegistry:          promptRegistry,
 		mcpManager:              mcpManager,
 		mcpReadyChan:            mcpReadyChan,
@@ -489,12 +496,29 @@ func NewRemote(cfg *config.Config) (Model, error) {
 	m := initialModel()
 	m.config = cfg
 	m.agentAddr = addr
+	m.skillRegistry = app.SetupSkillRegistry(cfg, "")
 
 	// Add welcome message
 	m.messages = append(m.messages, chat.NewNoteMessage(
 		fmt.Sprintf("Connecting to agentd at %s...", addr),
 	))
 
+	return m, nil
+}
+
+// NewWithLocalAgent creates a Model backed by a pre-built agentproto.Client
+// (typically an agentd.LocalClient running in-process). No network address is
+// needed; the client handles session creation and event delivery directly.
+func NewWithLocalAgent(cfg *config.Config, client agentproto.Client) (Model, error) {
+	m := initialModel()
+	m.config = cfg
+	m.agentClient = client
+	m.skillRegistry = app.SetupSkillRegistry(cfg, "")
+	// agentAddr is set to a sentinel so Init triggers the remote-mode connection
+	// path, but connectWithClient is used instead of connectToAgent.
+	m.agentAddr = "local"
+
+	m.messages = append(m.messages, chat.NewNoteMessage("Starting local agent..."))
 	return m, nil
 }
 
@@ -516,6 +540,57 @@ func connectToAgent(addr string, persona string, cfg *config.Config) tea.Cmd {
 		conn, err := client.Connect(ctx, sessionID)
 		if err != nil {
 			return agentDisconnectedMsg{err: fmt.Errorf("connect ws: %w", err)}
+		}
+		return agentConnectedMsg{conn: conn, client: client, sessionID: sessionID}
+	}
+}
+
+// connectWithClient uses a pre-built agentproto.Client (e.g. LocalClient) to
+// create a session and open an in-process connection. Used by NewWithLocalAgent.
+func connectWithClient(client agentproto.Client, persona string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		sessionID, err := client.CreateSession(ctx, agentproto.SessionConfig{
+			Persona: persona,
+			Source:  "tui",
+		})
+		if err != nil {
+			return agentDisconnectedMsg{err: fmt.Errorf("create session: %w", err)}
+		}
+		conn, err := client.Connect(ctx, sessionID)
+		if err != nil {
+			return agentDisconnectedMsg{err: fmt.Errorf("connect: %w", err)}
+		}
+		return agentConnectedMsg{conn: conn, client: client, sessionID: sessionID}
+	}
+}
+
+// reconnectToSession closes the current agentd connection and connects to an
+// already-existing session by ID. Used after /persona or /model creates a branch.
+func (m Model) reconnectToSession(sessionID, noteMsg string) (Model, tea.Cmd) {
+	// Close the existing connection cleanly.
+	if m.conn != nil {
+		_ = m.conn.Close()
+		m.conn = nil
+	}
+
+	// Reset conversation state; the branched session has its own history.
+	m.messages = nil
+	m.isStreaming = false
+	m.streamingMsgIndex = -1
+	m.stableRenderedCache = ""
+
+	if noteMsg != "" {
+		m.messages = append(m.messages, chat.NewNoteMessage(noteMsg))
+	}
+	m.updateViewport()
+
+	client := m.agentClient
+	return m, func() tea.Msg {
+		ctx := context.Background()
+		conn, err := client.Connect(ctx, sessionID)
+		if err != nil {
+			return agentDisconnectedMsg{err: fmt.Errorf("connect to branch %s: %w", sessionID, err)}
 		}
 		return agentConnectedMsg{conn: conn, client: client, sessionID: sessionID}
 	}
@@ -664,7 +739,12 @@ func (m Model) Init() tea.Cmd {
 		if m.config != nil {
 			persona = m.config.UI.Persona
 		}
-		cmds = append(cmds, connectToAgent(m.agentAddr, persona, m.config))
+		if m.agentClient != nil {
+			// Pre-built client (e.g. LocalClient) — skip network dialing.
+			cmds = append(cmds, connectWithClient(m.agentClient, persona))
+		} else {
+			cmds = append(cmds, connectToAgent(m.agentAddr, persona, m.config))
+		}
 		return tea.Batch(cmds...)
 	}
 

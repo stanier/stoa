@@ -52,6 +52,10 @@ type CommandState struct {
 	// should prefer server-side data over the local message snapshot.
 	AgentClient agentproto.Client // nil in standalone mode
 	SessionID   string            // empty in standalone mode
+
+	// AgentController provides access to live sub-agent management (/spawn, /agents, /kill).
+	// Nil when agent management is not available (e.g. not yet connected).
+	AgentController AgentController
 }
 
 // CommandResult represents the result of a command execution

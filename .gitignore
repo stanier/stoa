@@ -42,7 +42,7 @@ history/
 
 # Build and runtime caches
 build-cache/
-cache/
+/cache/
 .build-cache/
 
 # Claude temporary directory
@@ -89,3 +89,5 @@ docker-compose.*.yml
 
 # Temporary build/project docs
 scratch/
+
+.stoa/

@@ -77,7 +77,7 @@
     height: 100%; background: var(--accent);
     border-radius: 2px; transition: width 0.3s ease;
   }
-  .bar-fill.over { background: #f87171; }
+  .bar-fill.over { background: var(--danger); }
 
   .divider { border: none; border-top: 1px solid var(--border); margin: 1rem 0; }
 
@@ -91,7 +91,6 @@
     animation: spin 0.7s linear infinite;
     margin: 0.25rem 0;
   }
-  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 
 <div class="usage-card">

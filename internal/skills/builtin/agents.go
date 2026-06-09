@@ -5,44 +5,31 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/stanier/stoa/internal/agents"
 	"github.com/stanier/stoa/internal/skills"
 )
 
-// AgentsCommand lists all active agents
-type AgentsCommand struct {
-	manager *agents.Manager
+// AgentsCommand lists active sub-agents and controls the agent panel.
+type AgentsCommand struct{}
+
+// NewAgentsCommand creates a new agents command.
+func NewAgentsCommand() *AgentsCommand {
+	return &AgentsCommand{}
 }
 
-// NewAgentsCommand creates a new agents command
-func NewAgentsCommand(manager *agents.Manager) *AgentsCommand {
-	return &AgentsCommand{manager: manager}
-}
+func (c *AgentsCommand) Name() string        { return "agents" }
+func (c *AgentsCommand) Description() string { return "List active sub-agents and their status" }
 
-// Name returns the command name
-func (c *AgentsCommand) Name() string {
-	return "agents"
-}
-
-// Description returns the command description
-func (c *AgentsCommand) Description() string {
-	return "List all active agents and their status"
-}
-
-// Usage returns usage instructions
 func (c *AgentsCommand) Usage() string {
 	return `/agents [list|show|hide|toggle]
 
 Subcommands:
-  list   - List all active agents (default)
+  list   - List all active sub-agents (default)
   show   - Show agent panel
   hide   - Hide agent panel
   toggle - Toggle panel visibility`
 }
 
-// Execute runs the command
 func (c *AgentsCommand) Execute(ctx context.Context, args []string, state *skills.CommandState) (skills.CommandResult, error) {
-	// Parse subcommand
 	subcommand := ""
 	if len(args) > 0 {
 		subcommand = args[0]
@@ -51,36 +38,47 @@ func (c *AgentsCommand) Execute(ctx context.Context, args []string, state *skill
 	switch subcommand {
 	case "show":
 		return skills.CommandResult{
-			Success: true,
-			Message: "",
-			Metadata: map[string]interface{}{
-				"ui_action":     "toggle_panel",
-				"panel_visible": true,
-			},
+			Success:  true,
+			Metadata: map[string]interface{}{"ui_action": "toggle_panel", "panel_visible": true},
 		}, nil
 
 	case "hide":
 		return skills.CommandResult{
-			Success: true,
-			Message: "",
-			Metadata: map[string]interface{}{
-				"ui_action":     "toggle_panel",
-				"panel_visible": false,
-			},
+			Success:  true,
+			Metadata: map[string]interface{}{"ui_action": "toggle_panel", "panel_visible": false},
 		}, nil
 
 	case "toggle":
 		return skills.CommandResult{
-			Success: true,
-			Message: "",
-			Metadata: map[string]interface{}{
-				"ui_action":     "toggle_panel",
-				"panel_visible": "toggle",
-			},
+			Success:  true,
+			Metadata: map[string]interface{}{"ui_action": "toggle_panel", "panel_visible": "toggle"},
 		}, nil
 
 	case "list", "":
-		return c.listAgents()
+		if state.AgentController == nil {
+			return skills.CommandResult{Success: true, Message: "No active sub-agents (agent management not connected)"}, nil
+		}
+		agents, err := state.AgentController.ListSubAgents(ctx)
+		if err != nil {
+			return skills.CommandResult{Success: false, Message: fmt.Sprintf("Failed to list agents: %v", err)}, err
+		}
+		if len(agents) == 0 {
+			return skills.CommandResult{Success: true, Message: "No active sub-agents"}, nil
+		}
+		var b strings.Builder
+		b.WriteString("Active sub-agents:\n\n")
+		for _, a := range agents {
+			name := a.Name
+			if name == "" {
+				name = a.ID
+			}
+			b.WriteString(fmt.Sprintf("%s %s (%s) — %s\n", statusGlyph(a.Status), name, a.Persona, a.Status))
+			if a.Task != "" {
+				b.WriteString(fmt.Sprintf("   Task: %s\n", a.Task))
+			}
+			b.WriteString("\n")
+		}
+		return skills.CommandResult{Success: true, Message: b.String()}, nil
 
 	default:
 		return skills.CommandResult{
@@ -90,56 +88,19 @@ func (c *AgentsCommand) Execute(ctx context.Context, args []string, state *skill
 	}
 }
 
-// listAgents returns a list of all active agents
-func (c *AgentsCommand) listAgents() (skills.CommandResult, error) {
-	agentsList := c.manager.ListAgents()
-
-	if len(agentsList) == 0 {
-		return skills.CommandResult{
-			Success: true,
-			Message: "No active agents",
-		}, nil
-	}
-
-	var b strings.Builder
-	b.WriteString("Active Agents:\n\n")
-
-	for _, agent := range agentsList {
-		status := agent.Status()
-		statusEmoji := getStatusEmoji(status)
-
-		b.WriteString(fmt.Sprintf("%s %s (%s) - %s [%.0f%%]\n",
-			statusEmoji,
-			agent.Name(),
-			agent.Persona().Name(),
-			status,
-			agent.Progress()*100))
-
-		if task := agent.CurrentTask(); task != nil {
-			b.WriteString(fmt.Sprintf("   Task: %s\n", task.Description))
-		}
-		b.WriteString("\n")
-	}
-
-	return skills.CommandResult{
-		Success: true,
-		Message: b.String(),
-	}, nil
-}
-
-func getStatusEmoji(status agents.Status) string {
+func statusGlyph(status string) string {
 	switch status {
-	case agents.StatusRunning:
-		return "▶️"
-	case agents.StatusCompleted:
-		return "✅"
-	case agents.StatusError:
-		return "❌"
-	case agents.StatusPaused:
-		return "⏸️"
-	case agents.StatusKilled:
-		return "🛑"
+	case "running":
+		return "▶"
+	case "completed":
+		return "✓"
+	case "error":
+		return "✗"
+	case "waiting":
+		return "⏸"
+	case "cancelled", "killed":
+		return "■"
 	default:
-		return "⏹️"
+		return "○"
 	}
 }

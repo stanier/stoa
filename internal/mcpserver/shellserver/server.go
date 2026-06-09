@@ -121,9 +121,10 @@ func (s *Server) handleRunCommand(ctx context.Context, args map[string]interface
 	execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	// Split the command into argv to avoid shell injection. Shell metacharacters
-	// (pipes, redirects, variable expansion, etc.) are not interpreted.
-	// Complex shell pipelines are intentionally unsupported.
+	// Split the command into argv using whitespace. This is NOT a security
+	// boundary — an argv[0] that points to a malicious binary still executes.
+	// The actual security boundary is the container this server runs inside;
+	// do not deploy shellserver outside of an isolated container.
 	argv := strings.Fields(command)
 	if len(argv) == 0 {
 		return mcpserver.ErrorResult("command is empty after parsing"), nil

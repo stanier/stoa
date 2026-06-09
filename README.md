@@ -54,14 +54,16 @@ An AI agent platform built around a central daemon (`agentd`) that owns all LLM 
 
 * **MCP servers** — Built-in tool servers implementing the [Model Context Protocol](https://modelcontextprotocol.io): filesystem, memory, fetch, shell, diff, web-search, HTTP, GraphQL, PromQL, NetBox, Trello, Zulip, and an ACP MCP server.
 
-* **llm-proxy** — An OpenAI-compatible passthrough proxy with API key management via `apikeyd`.
+* **inference-gateway** — An OpenAI-compatible passthrough proxy with API key management via `apikeyd`.
 
 ## LLM Providers
 
+Provider selection and model are configured in YAML (`~/.config/stoa/config.yaml`) under `llm.providers`. API keys and endpoint URLs come from environment variables.
+
 | Provider | Env vars | Notes |
 |---|---|---|
-| Anthropic | `LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY` | Native streaming, extended thinking |
-| OpenAI | `LLM_PROVIDER=openai`, `OPENAI_API_KEY` | Default |
+| Anthropic | `ANTHROPIC_API_KEY` | Native streaming, extended thinking |
+| OpenAI | `OPENAI_API_KEY` | Default |
 | Any OpenAI-compatible | `OPENAI_API_URL`, `OPENAI_API_KEY` | Together, Groq, Ollama, etc. |
 
 ## Features
@@ -85,20 +87,19 @@ An AI agent platform built around a central daemon (`agentd`) that owns all LLM 
 See [docs/SETUP.md](docs/SETUP.md) for full installation and configuration instructions. The short version:
 
 ```bash
-# Standalone TUI
+# Standalone TUI — requires a config.yaml with llm.providers (see docs/SETUP.md)
 make build-chat
-LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... ./bin/debug/chat
+ANTHROPIC_API_KEY=sk-ant-... ./bin/debug/chat
 
 # Daemon + TUI (recommended)
 make build-agentd build-chat
-ANTHROPIC_API_KEY=sk-ant-... LLM_PROVIDER=anthropic ./bin/debug/agentd --port 7777
+ANTHROPIC_API_KEY=sk-ant-... ./bin/debug/agentd --port 7777
 AGENT_ADDRESS=http://localhost:7777 ./bin/debug/chat
 
 # Full stack in containers (agentd, webd, auth, MCP servers)
-cp .env.example .env   # fill in API keys
+./scripts/init.sh      # guided setup: generates .env, secrets, and next-step commands
 make podman-build-all
 podman-compose up -d
-# Web UI at http://localhost:8080
 ```
 
 ## Documentation
@@ -111,7 +112,7 @@ podman-compose up -d
 - [docs/SLACK_BRIDGE.md](docs/SLACK_BRIDGE.md) — Slack bridge setup
 - [docs/DISCORD_BRIDGE.md](docs/DISCORD_BRIDGE.md) — Discord bridge setup
 - [docs/MATRIX_BRIDGE.md](docs/MATRIX_BRIDGE.md) — Matrix bridge setup
-- [docs/MCP_SERVERS_ROADMAP.md](docs/MCP_SERVERS_ROADMAP.md) — MCP server status and roadmap
+- [ROADMAP.md](ROADMAP.md) — Outstanding work: performance, security, gateway, MCP servers, bridge features
 
 ## Building
 
@@ -133,4 +134,4 @@ make podman-push-all         # retag and push to ghcr.io/stanier
 
 ---
 
-Donations are welcome — see [DONATIONS.md](DONATIONS.md) if you'd like to contribute.
+Donations are welcome — see [docs/DONATIONS.md](docs/DONATIONS.md) if you'd like to contribute.

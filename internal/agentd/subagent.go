@@ -25,7 +25,8 @@ var noopSendEvent = func(agentproto.Event) {}
 // WaitForMessageTool is registered only in child sessions. It blocks until the
 // parent sends a message via MessageAgentTool or the context is cancelled.
 type WaitForMessageTool struct {
-	sa *SubAgent
+	sa   *SubAgent
+	sess *Session // needed for status transitions under the session lock
 }
 
 func (t *WaitForMessageTool) Name() string { return "wait_for_message" }
@@ -39,15 +40,29 @@ func (t *WaitForMessageTool) Schema() skills.ToolSchema {
 }
 
 func (t *WaitForMessageTool) Execute(ctx context.Context, _ json.RawMessage) (skills.ToolResult, error) {
+	t.sess.mu.Lock()
+	t.sa.status = SubAgentStatusWaiting
+	t.sess.mu.Unlock()
+
+	var result skills.ToolResult
 	select {
 	case msg, ok := <-t.sa.inbox:
 		if !ok {
-			return skills.ToolResult{Success: false, Error: "agent was cancelled"}, nil
+			result = skills.ToolResult{Success: false, Error: "agent was cancelled"}
+		} else {
+			result = skills.ToolResult{Success: true, Content: msg}
 		}
-		return skills.ToolResult{Success: true, Content: msg}, nil
 	case <-ctx.Done():
-		return skills.ToolResult{Success: false, Error: "timeout waiting for message"}, nil
+		result = skills.ToolResult{Success: false, Error: "timeout waiting for message"}
 	}
+
+	t.sess.mu.Lock()
+	if t.sa.status == SubAgentStatusWaiting {
+		t.sa.status = SubAgentStatusRunning
+	}
+	t.sess.mu.Unlock()
+
+	return result, nil
 }
 
 // ─── SpawnAgentTool ──────────────────────────────────────────────────────────
@@ -100,34 +115,49 @@ func (t *SpawnAgentTool) Execute(ctx context.Context, params json.RawMessage) (s
 		input.Persona = "default"
 	}
 
+	agentID := spawnSubAgentInSession(t.s, t.sess, input.Persona, input.Task)
+
+	// Emit observability event immediately so the client knows the agent was spawned.
+	t.sendEvent(agentproto.Event{
+		Type: agentproto.EventTypeAgentSpawned,
+		AgentSpawned: &agentproto.AgentSpawnedEvent{
+			AgentID: agentID,
+			Task:    input.Task,
+			Persona: input.Persona,
+		},
+	})
+
+	resultJSON, _ := json.Marshal(map[string]interface{}{
+		"agent_id": agentID,
+		"status":   "running",
+	})
+	content := string(resultJSON) + "\nIMPORTANT: You MUST now call list_agents to check the agent's status. Do not call spawn_agent again until you have done so."
+	return skills.ToolResult{Success: true, Content: content}, nil
+}
+
+// spawnSubAgentInSession starts a new child sub-agent within sess and returns its ID.
+// It registers the sub-agent in sess.subAgents, launches its agentic loop in a goroutine,
+// and pipes the result back through sess.resultQueue.
+func spawnSubAgentInSession(s *Server, sess *Session, persona, task string) string {
 	agentID := uuid.New().String()
 	childCtx, cancel := context.WithTimeout(context.Background(), agenticLoopTimeout)
 
 	inbox := make(chan string, 4)
 	sa := &SubAgent{
 		id:      agentID,
-		task:    input.Task,
-		persona: input.Persona,
+		task:    task,
+		persona: persona,
 		status:  SubAgentStatusRunning,
 		cancel:  cancel,
 		inbox:   inbox,
 	}
 
-	t.sess.mu.Lock()
-	t.sess.subAgents[agentID] = sa
-	t.sess.mu.Unlock()
+	sess.mu.Lock()
+	sess.subAgents[agentID] = sa
+	sess.mu.Unlock()
 
-	// Build the child LLM context (system prompt + tools from global registry).
-	childLLMCtx := app.BuildLLMContext(
-		t.s.cfg,
-		t.s.skillRegistry,
-		t.s.promptReg,
-		t.s.personaReg,
-		input.Persona,
-		nil,
-	)
+	childLLMCtx := app.BuildLLMContext(s.cfg, s.skillRegistry, s.promptReg, s.personaReg, persona, nil)
 
-	// Build child message history: system prompt + task with sub-agent context.
 	var childMessages []chat.Message
 	if childLLMCtx.SystemPrompt != "" {
 		childMessages = append(childMessages, systemMessage(childLLMCtx.SystemPrompt))
@@ -135,15 +165,13 @@ func (t *SpawnAgentTool) Execute(ctx context.Context, params json.RawMessage) (s
 	taskMsg := fmt.Sprintf(
 		"You are operating as a sub-agent (ID: %s, persona: %s).\n\nYour task:\n\n%s\n\n"+
 			"Note: If you need input from the parent agent, use the wait_for_message tool.",
-		agentID, input.Persona, input.Task,
+		agentID, persona, task,
 	)
 	childMessages = append(childMessages, chat.NewUserMessage(taskMsg))
 
-	childSess := newChildSession(agentID, input.Persona, childMessages, childLLMCtx)
+	childSess := newChildSession(agentID, persona, childMessages, childLLMCtx)
 
-	// Add wait_for_message to the child session — both as an executable tool and
-	// as an LLM-visible tool definition so the model knows it can call it.
-	waitTool := &WaitForMessageTool{sa: sa}
+	waitTool := &WaitForMessageTool{sa: sa, sess: childSess}
 	childSess.mu.Lock()
 	childSess.perSessionTools["wait_for_message"] = waitTool
 	childSess.llmCtx.Tools = append(childSess.llmCtx.Tools, llm.Tool{
@@ -153,14 +181,14 @@ func (t *SpawnAgentTool) Execute(ctx context.Context, params json.RawMessage) (s
 	})
 	childSess.mu.Unlock()
 
-	parentResultQueue := t.sess.resultQueue
+	parentResultQueue := sess.resultQueue
 
 	go func() {
 		defer cancel()
 
-		finalContent, _, _, _, err := runAgenticLoop(childCtx, t.s, childSess, noopSendEvent)
+		finalContent, _, _, _, err := runAgenticLoop(childCtx, s, childSess, noopSendEvent)
 
-		t.sess.mu.Lock()
+		sess.mu.Lock()
 		if sa.status == SubAgentStatusRunning {
 			if err != nil {
 				sa.status = SubAgentStatusError
@@ -168,7 +196,7 @@ func (t *SpawnAgentTool) Execute(ctx context.Context, params json.RawMessage) (s
 				sa.status = SubAgentStatusCompleted
 			}
 		}
-		t.sess.mu.Unlock()
+		sess.mu.Unlock()
 
 		result := subAgentResult{agentID: agentID}
 		if err != nil {
@@ -185,18 +213,28 @@ func (t *SpawnAgentTool) Execute(ctx context.Context, params json.RawMessage) (s
 		}
 	}()
 
-	// Emit observability event immediately so the client knows the agent was spawned.
-	t.sendEvent(agentproto.Event{
-		Type: agentproto.EventTypeAgentSpawned,
-		AgentSpawned: &agentproto.AgentSpawnedEvent{
-			AgentID: agentID,
-			Task:    input.Task,
-			Persona: input.Persona,
-		},
-	})
+	return agentID
+}
 
-	resultJSON, _ := json.Marshal(map[string]string{"agent_id": agentID})
-	return skills.ToolResult{Success: true, Content: string(resultJSON)}, nil
+// cancelSubAgentInSession cancels a running sub-agent by ID. Returns false if not found or not active.
+func cancelSubAgentInSession(sess *Session, agentID string) bool {
+	sess.mu.Lock()
+	sa, ok := sess.subAgents[agentID]
+	if !ok {
+		sess.mu.Unlock()
+		return false
+	}
+	if sa.status != SubAgentStatusRunning && sa.status != SubAgentStatusWaiting {
+		sess.mu.Unlock()
+		return false
+	}
+	sa.status = SubAgentStatusCancelled
+	sa.closeInbox()
+	cancelFn := sa.cancel
+	sess.mu.Unlock()
+
+	cancelFn()
+	return true
 }
 
 // ─── MessageAgentTool ────────────────────────────────────────────────────────
@@ -243,7 +281,7 @@ func (t *MessageAgentTool) Execute(_ context.Context, params json.RawMessage) (s
 	t.sess.mu.Lock()
 	sa, ok := t.sess.subAgents[input.AgentID]
 	var inboxRef chan string
-	if ok && sa.status == SubAgentStatusRunning {
+	if ok && (sa.status == SubAgentStatusRunning || sa.status == SubAgentStatusWaiting) {
 		inboxRef = sa.inbox
 	}
 	t.sess.mu.Unlock()
@@ -342,7 +380,7 @@ func (t *CancelAgentTool) Execute(_ context.Context, params json.RawMessage) (sk
 			Error:   fmt.Sprintf("agent %s not found", input.AgentID),
 		}, nil
 	}
-	if sa.status != SubAgentStatusRunning {
+	if sa.status != SubAgentStatusRunning && sa.status != SubAgentStatusWaiting {
 		t.sess.mu.Unlock()
 		return skills.ToolResult{
 			Success: false,
@@ -369,6 +407,7 @@ func newChildSession(id, persona string, messages []chat.Message, llmCtx app.LLM
 		persona:         persona,
 		messages:        messages,
 		llmCtx:          llmCtx,
+		toolsRevealed:   true, // child has a fixed, known tool set — skip list_tools gate
 		permPending:     make(map[string]chan bool),
 		subAgents:       make(map[string]*SubAgent), // no nesting
 		resultQueue:     make(chan subAgentResult, 1), // non-nil; unused in practice
@@ -384,7 +423,7 @@ func cancelAllSubAgents(sess *Session) {
 	sess.mu.Lock()
 	var toCancel []*SubAgent
 	for _, sa := range sess.subAgents {
-		if sa.status == SubAgentStatusRunning {
+		if sa.status == SubAgentStatusRunning || sa.status == SubAgentStatusWaiting {
 			sa.status = SubAgentStatusCancelled
 			sa.closeInbox()
 			toCancel = append(toCancel, sa)

@@ -3,19 +3,19 @@ package transport
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
+	"strings"
 	"sync"
 
-	"strings"
-
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/strslice"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/docker/go-connections/nat"
+	cerrdefs "github.com/containerd/errdefs"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/strslice"
+	"github.com/moby/moby/client"
 )
 
 // DockerTransportConfig holds configuration for Docker transport
@@ -98,8 +98,8 @@ func (t *DockerTransport) Connect(ctx context.Context) error {
 
 	// Attach to the container's stdio BEFORE starting so we don't miss any
 	// output from the MCP binary's startup. With Tty:false the stream is
-	// multiplexed with 8-byte headers; stdcopy.StdCopy demuxes it below.
-	attachResp, err := t.cli.ContainerAttach(ctx, containerID, container.AttachOptions{
+	// multiplexed with 8-byte headers; demuxDockerStream demuxes it below.
+	attachResp, err := t.cli.ContainerAttach(ctx, containerID, client.ContainerAttachOptions{
 		Stream: true,
 		Stdin:  true,
 		Stdout: true,
@@ -111,17 +111,18 @@ func (t *DockerTransport) Connect(ctx context.Context) error {
 	}
 
 	// Now start the container (runs the MCP binary as PID 1)
-	if err := t.cli.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
+	if _, err := t.cli.ContainerStart(ctx, containerID, client.ContainerStartOptions{}); err != nil {
 		attachResp.Close()
 		t.cleanup(ctx)
 		return fmt.Errorf("failed to start container: %w", err)
 	}
 
 	// Demux the multiplexed stdout/stderr stream into a plain byte pipe.
+	// Stderr from the container is forwarded to the host logger so crashes are visible.
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
-		stdcopy.StdCopy(pw, io.Discard, attachResp.Reader)
+		demuxDockerStream(pw, attachResp.Reader, t.cfg.ContainerName)
 	}()
 
 	t.stdin = attachResp.Conn
@@ -194,7 +195,7 @@ func (t *DockerTransport) Writer() io.Writer {
 // from a registry — a clear error is returned instead so the operator knows
 // to run `make podman-build-local-mcp-all`.
 func (t *DockerTransport) pullImageIfNeeded(ctx context.Context) error {
-	_, _, err := t.cli.ImageInspectWithRaw(ctx, t.cfg.Image)
+	_, err := t.cli.ImageInspect(ctx, t.cfg.Image)
 	if err == nil {
 		return nil // already present locally
 	}
@@ -203,13 +204,13 @@ func (t *DockerTransport) pullImageIfNeeded(ctx context.Context) error {
 		return fmt.Errorf("image %q not found locally — build it first (e.g. make podman-build-local-mcp-all)", t.cfg.Image)
 	}
 
-	reader, err := t.cli.ImagePull(ctx, t.cfg.Image, image.PullOptions{})
+	resp, err := t.cli.ImagePull(ctx, t.cfg.Image, client.ImagePullOptions{})
 	if err != nil {
 		return err
 	}
-	defer reader.Close()
+	defer resp.Close()
 
-	_, err = io.Copy(io.Discard, reader)
+	_, err = io.Copy(io.Discard, resp)
 	return err
 }
 
@@ -231,7 +232,7 @@ func (t *DockerTransport) createContainer(ctx context.Context) (string, error) {
 
 	// Remove any stale container with the same name (handles orphans from prior crashes).
 	if containerName != "" {
-		_ = t.cli.ContainerRemove(ctx, containerName, container.RemoveOptions{Force: true})
+		_, _ = t.cli.ContainerRemove(ctx, containerName, client.ContainerRemoveOptions{Force: true})
 	}
 
 	containerConfig := &container.Config{
@@ -244,8 +245,8 @@ func (t *DockerTransport) createContainer(ctx context.Context) (string, error) {
 	}
 
 	hostConfig := &container.HostConfig{
-		Mounts:      mounts,
-		NetworkMode: container.NetworkMode(t.cfg.NetworkMode),
+		Mounts:         mounts,
+		NetworkMode:    container.NetworkMode(t.cfg.NetworkMode),
 		AutoRemove:     true,
 		ReadonlyRootfs: true,
 		Tmpfs: map[string]string{
@@ -260,15 +261,52 @@ func (t *DockerTransport) createContainer(ctx context.Context) (string, error) {
 			NanoCPUs:   500000000,         // 0.5 CPU
 			PidsLimit:  func() *int64 { v := int64(50); return &v }(),
 		},
-		PortBindings: nat.PortMap{},
+		PortBindings: network.PortMap{},
 	}
 
-	resp, err := t.cli.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, containerName)
+	resp, err := t.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:     containerConfig,
+		HostConfig: hostConfig,
+		Name:       containerName,
+	})
 	if err != nil {
 		return "", err
 	}
 
 	return resp.ID, nil
+}
+
+// demuxDockerStream reads Docker's multiplexed stream format (8-byte header per frame:
+// stream_type(1), padding(3), frame_size(4 big-endian)) and writes stdout frames to dst.
+// Stderr frames are logged via the standard logger so container crash output is visible.
+// Returns nil on clean EOF.
+func demuxDockerStream(dst io.Writer, src io.Reader, containerName string) error {
+	hdr := make([]byte, 8)
+	for {
+		if _, err := io.ReadFull(src, hdr); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return nil
+			}
+			return err
+		}
+		size := int64(binary.BigEndian.Uint32(hdr[4:8]))
+		switch hdr[0] {
+		case 1: // stdout
+			if _, err := io.CopyN(dst, src, size); err != nil {
+				return err
+			}
+		case 2: // stderr — log so container crash messages are visible
+			buf := make([]byte, size)
+			if _, err := io.ReadFull(src, buf); err != nil {
+				return err
+			}
+			log.Printf("[%s stderr] %s", containerName, strings.TrimRight(string(buf), "\n"))
+		default: // stdin echo (0) — discard
+			if _, err := io.CopyN(io.Discard, src, size); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 // SanitizeContainerName converts a server name to a valid Docker container name.
@@ -294,10 +332,10 @@ func (t *DockerTransport) cleanup(ctx context.Context) error {
 	}
 
 	timeout := 10
-	err := t.cli.ContainerStop(ctx, t.containerID, container.StopOptions{
+	_, err := t.cli.ContainerStop(ctx, t.containerID, client.ContainerStopOptions{
 		Timeout: &timeout,
 	})
-	if err != nil && client.IsErrNotFound(err) {
+	if err != nil && cerrdefs.IsNotFound(err) {
 		err = nil
 	}
 

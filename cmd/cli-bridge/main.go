@@ -52,6 +52,7 @@ func main() {
 	jsonMode := flag.Bool("json", false, "Output events as JSON lines (implies -no-stream)")
 	quiet := flag.Bool("quiet", false, "Suppress tool invocation and mention notices")
 	thinking := flag.Bool("thinking", false, "Show model reasoning in output")
+	tlsSkipVerify := flag.Bool("tls-skip-verify", false, "Skip TLS certificate verification (env: AGENTD_TLS_SKIP_VERIFY)")
 	helpFlag := flag.Bool("help", false, "Show help")
 
 	flag.Parse()
@@ -69,6 +70,9 @@ func main() {
 	if addr == "" {
 		addr = defaultAddress
 	}
+
+	// Resolve TLS skip verify: flag → env.
+	skipVerify := *tlsSkipVerify || os.Getenv("AGENTD_TLS_SKIP_VERIFY") == "true"
 
 	// Positional args are treated as a message.
 	if flag.NArg() > 0 && *message == "" {
@@ -105,7 +109,7 @@ func main() {
 		}
 	}
 
-	client := agentproto.NewWSClientWithToken(addr, os.Getenv("AGENTD_API_KEY"))
+	client := agentproto.NewWSClientWithOptions(addr, os.Getenv("AGENTD_API_KEY"), skipVerify)
 
 	// Create or reuse session.
 	sid := cfg.sessionID
@@ -737,6 +741,7 @@ FLAGS
   -json              Output events as newline-delimited JSON (implies -no-stream)
   -quiet             Suppress tool/perm notices
   -thinking          Show model reasoning (written to stderr)
+  -tls-skip-verify   Skip TLS certificate verification (env: AGENTD_TLS_SKIP_VERIFY)
   -help              Show this help
 
 INTERACTIVE COMMANDS (lines starting with /)

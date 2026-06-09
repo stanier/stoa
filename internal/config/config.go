@@ -40,7 +40,8 @@ type Config struct {
 	Gateway GatewayConfig `mapstructure:"gateway"`
 
 	// Runtime flags (not from config file)
-	EnableConnectorsFlag bool // Set by --enable-connectors flag
+	EnableConnectorsFlag bool   // Set by --enable-connectors flag
+	LoadedFrom           string // Path of the config file that was loaded; empty if none found
 }
 
 // GatewayConfig controls provider fallback and retry behaviour.
@@ -160,7 +161,7 @@ type AgentdConfig struct {
 	SquidConfPath string `mapstructure:"squid_conf_path"`
 
 	// APIKeydURL is the internal URL of the apikeyd service used to validate
-	// external ACP caller API keys (llmp_ prefix).
+	// external ACP caller API keys (stoa-infgw_ prefix).
 	// Example: "http://apikeyd:8889"
 	// When empty, apikeyd-based key validation is disabled.
 	APIKeydURL string `mapstructure:"apikeyd_url"`
@@ -188,7 +189,7 @@ type TitlingConfig struct {
 // LLMProviderConfig describes one named LLM provider.
 // All providers — including the default — are defined under llm.providers in the YAML config.
 type LLMProviderConfig struct {
-	// Name is a unique identifier used when selecting a provider. e.g. "llm-proxy", "anthropic-opus"
+	// Name is a unique identifier used when selecting a provider. e.g. "inference-gateway", "anthropic-opus"
 	Name string `mapstructure:"name"`
 	// Type is "openai" (or any OpenAI-compatible endpoint), "anthropic", or "gemini".
 	Type string `mapstructure:"type"`
@@ -687,18 +688,22 @@ func Load() (*Config, error) {
 	v.BindEnv("slack.session_ttl", "SLACK_SESSION_TTL")
 	v.BindEnv("slack.session_file", "SLACK_SESSION_FILE")
 
-	// Config file
+	// Config file — search in priority order: system, user home, then repo-local
+	// config/ dir (convenient when running from the repo root during development).
+	v.SetConfigName("config")
+	v.SetConfigType("yaml")
+	v.AddConfigPath("/etc/stoa")
+
 	configDir, err := GetConfigDir()
 	if err == nil {
 		v.AddConfigPath(configDir)
-		v.SetConfigName("config")
-		v.SetConfigType("yaml")
+	}
 
-		// Try to read config file (not an error if it doesn't exist)
-		if err := v.ReadInConfig(); err != nil {
-			if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-				return nil, fmt.Errorf("error reading config file: %w", err)
-			}
+	v.AddConfigPath(".stoa/config") // $PWD/.stoa/config/config.yaml for per-project overrides
+
+	if err := v.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			return nil, fmt.Errorf("error reading config file: %w", err)
 		}
 	}
 
@@ -706,6 +711,20 @@ func Load() (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
+	}
+	cfg.LoadedFrom = v.ConfigFileUsed()
+
+	// Viper lowercases all map keys; MCP server env var names must be
+	// uppercase so the container process can find them via os.Getenv.
+	for i := range cfg.MCP.Servers {
+		if len(cfg.MCP.Servers[i].Env) == 0 {
+			continue
+		}
+		fixed := make(map[string]string, len(cfg.MCP.Servers[i].Env))
+		for k, v := range cfg.MCP.Servers[i].Env {
+			fixed[strings.ToUpper(k)] = v
+		}
+		cfg.MCP.Servers[i].Env = fixed
 	}
 
 	// resolveFileSecret reads a secret value from a file path stored in an env var.
@@ -793,6 +812,19 @@ func Load() (*Config, error) {
 		cfg.Gateway.FallbackChain = trimmed
 	}
 
+	// Expand ~ in any path fields that may have come from the config file.
+	// Viper does not expand tilde, so ~/... stays literal if set in YAML.
+	cfg.Logging.LogFile = expandTilde(cfg.Logging.LogFile)
+	cfg.Trace.Dir = expandTilde(cfg.Trace.Dir)
+	cfg.Prompts.OverrideDir = expandTilde(cfg.Prompts.OverrideDir)
+	cfg.Permissions.PolicyFile = expandTilde(cfg.Permissions.PolicyFile)
+	cfg.Permissions.AuditLogPath = expandTilde(cfg.Permissions.AuditLogPath)
+	cfg.Agentd.SessionDir = expandTilde(cfg.Agentd.SessionDir)
+	cfg.Zulip.SessionFile = expandTilde(cfg.Zulip.SessionFile)
+	cfg.Slack.SessionFile = expandTilde(cfg.Slack.SessionFile)
+	cfg.Discord.SessionFile = expandTilde(cfg.Discord.SessionFile)
+	cfg.Matrix.SessionFile = expandTilde(cfg.Matrix.SessionFile)
+
 	// Validate required fields
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -859,6 +891,20 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// expandTilde replaces a leading "~/" with the user's home directory.
+// Returns the path unchanged if it does not start with "~/" or if the
+// home directory cannot be determined.
+func expandTilde(path string) string {
+	if !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, path[2:])
 }
 
 // GetConfigDir returns the configuration directory path

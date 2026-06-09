@@ -3,8 +3,10 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/stanier/stoa/internal/chat"
 	"github.com/stanier/stoa/internal/config"
@@ -17,20 +19,6 @@ import (
 type AnthropicClient struct {
 	client anthropic.Client
 	pc     *config.LLMProviderConfig
-}
-
-// NewAnthropicClientSimple creates an Anthropic client with minimal parameters.
-// Useful for proxy and other lightweight consumers that don't have a full config.
-// httpClient may be nil to use the SDK default.
-func NewAnthropicClientSimple(apiKey, apiURL, defaultModel string, defaultMaxTokens int, httpClient *http.Client) (*AnthropicClient, error) {
-	pc := &config.LLMProviderConfig{
-		Type:      "anthropic",
-		APIKey:    apiKey,
-		APIURL:    apiURL,
-		Model:     defaultModel,
-		MaxTokens: defaultMaxTokens,
-	}
-	return newAnthropicClientWithHTTP(pc, httpClient)
 }
 
 // NewAnthropicClient creates a new Anthropic client from a provider config entry.
@@ -61,6 +49,77 @@ func newAnthropicClientWithHTTP(pc *config.LLMProviderConfig, httpClient *http.C
 		client: client,
 		pc:     pc,
 	}, nil
+}
+
+// wrapAnthropicAuthError replaces SDK-generated credential error messages (which
+// reference ANTHROPIC_API_KEY) with messages that name the configured api_key_env.
+func (c *AnthropicClient) wrapAnthropicAuthError(err error) error {
+	keyEnv := c.pc.APIKeyEnv
+	if keyEnv == "" {
+		keyEnv = "ANTHROPIC_API_KEY"
+	}
+	var apiErr *anthropic.Error
+	if errors.As(err, &apiErr) && apiErr.StatusCode == 401 {
+		return fmt.Errorf("authentication failed for provider %q (HTTP 401): check the value of %s", c.pc.Name, keyEnv)
+	}
+	if strings.Contains(err.Error(), "no Anthropic credentials found") || strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
+		return fmt.Errorf("no API key for provider %q: set %s", c.pc.Name, keyEnv)
+	}
+	return err
+}
+
+// anthropicUserMessage builds an Anthropic user message param, including image
+// parts when the message carries vision content. Mirrors openAIUserMessage.
+func anthropicUserMessage(msg chat.Message) anthropic.MessageParam {
+	if len(msg.ImageParts) == 0 {
+		return anthropic.NewUserMessage(anthropic.NewTextBlock(msg.Content))
+	}
+	blocks := make([]anthropic.ContentBlockParamUnion, 0, len(msg.ImageParts)+1)
+	for _, ip := range msg.ImageParts {
+		if strings.HasPrefix(ip.URL, "data:") {
+			// data:<mediaType>;base64,<data>
+			semi := strings.Index(ip.URL, ";")
+			comma := strings.Index(ip.URL, ",")
+			if semi > 5 && comma > semi {
+				mediaType := ip.URL[5:semi]
+				b64Data := ip.URL[comma+1:]
+				blocks = append(blocks, anthropic.ContentBlockParamUnion{
+					OfImage: &anthropic.ImageBlockParam{
+						Type: "image",
+						Source: anthropic.ImageBlockParamSourceUnion{
+							OfBase64: &anthropic.Base64ImageSourceParam{
+								Type:      "base64",
+								MediaType: anthropic.Base64ImageSourceMediaType(mediaType),
+								Data:      b64Data,
+							},
+						},
+					},
+				})
+				continue
+			}
+		}
+		// Fall back to URL source for https:// links.
+		blocks = append(blocks, anthropic.ContentBlockParamUnion{
+			OfImage: &anthropic.ImageBlockParam{
+				Type: "image",
+				Source: anthropic.ImageBlockParamSourceUnion{
+					OfURL: &anthropic.URLImageSourceParam{
+						Type: "url",
+						URL:  ip.URL,
+					},
+				},
+			},
+		})
+	}
+	if msg.Content != "" {
+		blocks = append(blocks, anthropic.ContentBlockParamUnion{
+			OfText: &anthropic.TextBlockParam{Text: msg.Content},
+		})
+	}
+	return anthropic.MessageParam{
+		Role:    anthropic.MessageParamRoleUser,
+		Content: blocks,
+	}
 }
 
 // convertToolsToAnthropic converts our Tool format to Anthropic SDK format
@@ -99,35 +158,23 @@ func (c *AnthropicClient) SendMessage(ctx context.Context, messages []chat.Messa
 		apiMessages = rebuildAnthropicMessages(raw.Messages)
 		systemBlocks = rebuildAnthropicSystem(raw.System)
 	} else {
-	apiMessages = make([]anthropic.MessageParam, 0, len(messages))
-	for _, msg := range messages {
-		switch msg.Role {
-		case chat.RoleSystem:
-			// Anthropic uses a separate system parameter
-			systemBlocks = append(systemBlocks, anthropic.TextBlockParam{
-				Text: msg.Content,
-			})
-		case chat.RoleUser:
-			apiMessages = append(apiMessages, anthropic.MessageParam{
-				Role: anthropic.MessageParamRoleUser,
-				Content: []anthropic.ContentBlockParamUnion{{
-					OfText: &anthropic.TextBlockParam{
-						Text: msg.Content,
-					},
-				}},
-			})
-		case chat.RoleAssistant:
-			apiMessages = append(apiMessages, anthropic.MessageParam{
-				Role: anthropic.MessageParamRoleAssistant,
-				Content: []anthropic.ContentBlockParamUnion{{
-					OfText: &anthropic.TextBlockParam{
-						Text: msg.Content,
-					},
-				}},
-			})
+		apiMessages = make([]anthropic.MessageParam, 0, len(messages))
+		for _, msg := range messages {
+			switch msg.Role {
+			case chat.RoleSystem:
+				systemBlocks = append(systemBlocks, anthropic.TextBlockParam{Text: msg.Content})
+			case chat.RoleUser:
+				apiMessages = append(apiMessages, anthropicUserMessage(msg))
+			case chat.RoleAssistant:
+				apiMessages = append(apiMessages, anthropic.MessageParam{
+					Role: anthropic.MessageParamRoleAssistant,
+					Content: []anthropic.ContentBlockParamUnion{{
+						OfText: &anthropic.TextBlockParam{Text: msg.Content},
+					}},
+				})
+			}
 		}
-	}   // end for loop
-	}   // end else (chat.Message path)
+	}
 
 	// Merge model override from context if present.
 	ov := OverridesFromContext(ctx)
@@ -187,7 +234,7 @@ func (c *AnthropicClient) SendMessage(ctx context.Context, messages []chat.Messa
 	// Create message
 	message, err := c.client.Messages.New(ctx, params, sendOpts...)
 	if err != nil {
-		return "", fmt.Errorf("error creating message: %w", err)
+		return "", c.wrapAnthropicAuthError(err)
 	}
 
 	// Extract text content (tool_use blocks will be handled separately by the UI)
@@ -219,31 +266,19 @@ func (c *AnthropicClient) StreamMessage(ctx context.Context, messages []chat.Mes
 		for _, msg := range messages {
 			switch msg.Role {
 			case chat.RoleSystem:
-				// Anthropic uses a separate system parameter
-				systemBlocks = append(systemBlocks, anthropic.TextBlockParam{
-					Text: msg.Content,
-				})
+				systemBlocks = append(systemBlocks, anthropic.TextBlockParam{Text: msg.Content})
 			case chat.RoleUser:
-				apiMessages = append(apiMessages, anthropic.MessageParam{
-					Role: anthropic.MessageParamRoleUser,
-					Content: []anthropic.ContentBlockParamUnion{{
-						OfText: &anthropic.TextBlockParam{
-							Text: msg.Content,
-						},
-					}},
-				})
+				apiMessages = append(apiMessages, anthropicUserMessage(msg))
 			case chat.RoleAssistant:
 				apiMessages = append(apiMessages, anthropic.MessageParam{
 					Role: anthropic.MessageParamRoleAssistant,
 					Content: []anthropic.ContentBlockParamUnion{{
-						OfText: &anthropic.TextBlockParam{
-							Text: msg.Content,
-						},
+						OfText: &anthropic.TextBlockParam{Text: msg.Content},
 					}},
 				})
 			}
 		}
-	} // end else (chat.Message path)
+	}
 
 	// Create message parameters — MaxTokens set below after merging overrides.
 	params := anthropic.MessageNewParams{
@@ -436,7 +471,7 @@ func (c *AnthropicClient) StreamMessage(ctx context.Context, messages []chat.Mes
 		}
 
 		if err := stream.Err(); err != nil {
-			out <- StreamChunk{Error: fmt.Errorf("streaming error: %w", err)}
+			out <- StreamChunk{Error: c.wrapAnthropicAuthError(err)}
 			return
 		}
 
@@ -454,13 +489,34 @@ func (c *AnthropicClient) StreamMessage(ctx context.Context, messages []chat.Mes
 
 // ListModels returns models available from the Anthropic API.
 func (c *AnthropicClient) ListModels(ctx context.Context) ([]string, error) {
+	infos, err := c.ListModelInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(infos))
+	for i, m := range infos {
+		ids[i] = m.ID
+	}
+	return ids, nil
+}
+
+// ListModelInfo returns Anthropic models with capability flags sourced from the SDK.
+func (c *AnthropicClient) ListModelInfo(ctx context.Context) ([]ModelInfo, error) {
 	page, err := c.client.Models.List(ctx, anthropic.ModelListParams{})
 	if err != nil {
 		return nil, fmt.Errorf("list models: %w", err)
 	}
-	ids := make([]string, 0, len(page.Data))
+	infos := make([]ModelInfo, 0, len(page.Data))
 	for _, m := range page.Data {
-		ids = append(ids, m.ID)
+		caps := m.Capabilities
+		infos = append(infos, ModelInfo{
+			ID:                m.ID,
+			Vision:            caps.ImageInput.Supported,
+			ToolUse:           true, // all current Anthropic models support tool use
+			Thinking:          caps.Thinking.Supported,
+			PDFInput:          caps.PDFInput.Supported,
+			StructuredOutputs: caps.StructuredOutputs.Supported,
+		})
 	}
-	return ids, nil
+	return infos, nil
 }

@@ -57,7 +57,7 @@ func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 //
 // Response includes the raw key exactly once:
 //
-//	{ "key": "llmp_...", "id": "...", "name": "...", "prefix": "...", "created_at": "..." }
+//	{ "key": "stoa-infgw_...", "id": "...", "name": "...", "prefix": "...", "created_at": "..." }
 func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -163,7 +163,7 @@ func (s *Server) handleAdminProvisionKey(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// ─── Verification endpoint (called by llm-proxy, not browsers) ─────────────
+// ─── Verification endpoint (called by inference-gateway, not browsers) ─────────────
 
 // POST /keys/verify — validate an API key and return key metadata.
 // The raw key is passed as Authorization: Bearer <key> or x-api-key: <key>.

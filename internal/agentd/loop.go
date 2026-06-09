@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/stanier/stoa/internal/agentproto"
 	"github.com/stanier/stoa/internal/chat"
 	"github.com/stanier/stoa/internal/llm"
 	"github.com/stanier/stoa/internal/logging"
+	"github.com/stanier/stoa/internal/presidio"
 )
 
 // handleMessage appends the user's content to the session history and runs the
@@ -20,13 +22,18 @@ func handleMessage(
 	s *Server,
 	sess *Session,
 	content string,
+	imageParts []chat.ImagePart,
 	sendEvent func(agentproto.Event),
 ) (string, string, int, int, error) {
 	logging.Infof("agentd: processing message (len=%d, session %s)", len(content), sess.id)
 
-	// Append user message.
+	// Append user message, including any inlined image parts.
+	msg := chat.NewUserMessage(content)
+	if len(imageParts) > 0 {
+		msg.ImageParts = imageParts
+	}
 	sess.mu.Lock()
-	sess.messages = append(sess.messages, chat.NewUserMessage(content))
+	sess.messages = append(sess.messages, msg)
 	sess.mu.Unlock()
 	_ = sess.tracer.LogUserMessage(content)
 
@@ -89,7 +96,21 @@ func runAgenticLoop(
 		overrides := sess.overrides
 		sess.mu.Unlock()
 
-		// Inject the per-user llmp_* key so llm-proxy enforces user-scoped quotas.
+		// Debug: dump message history shape so conversation confusion is diagnosable.
+		if logging.IsDebug() {
+			logging.Debugf("agentd: turn %d — %d msgs, %d tools (session %s)",
+				iteration+1, len(msgs), len(llmTools), sess.id)
+			for i, m := range msgs {
+				preview := m.Content
+				if len(preview) > 120 {
+					preview = preview[:120] + "…"
+				}
+				logging.Debugf("agentd:   msg[%02d] role=%-10s len=%-5d %q",
+					i, m.Role, len(m.Content), preview)
+			}
+		}
+
+		// Inject the per-user stoa-infgw_* key so inference-gateway enforces user-scoped quotas.
 		// The key is provisioned by authd at login and passed in via SessionConfig.
 		if sess.llmKey != "" {
 			if overrides == nil {
@@ -115,22 +136,36 @@ func runAgenticLoop(
 		}
 
 		s.runPreLLM(ctx, sess.id, msgs)
+		provider := effectiveProvider(s, overrides)
+		llmStart := time.Now()
 		responseChan, err := llmClient.StreamMessage(callCtx, msgs, llmTools)
 		if err != nil {
 			logging.Errorf("agentd: LLM stream error (session %s): %v", sess.id, err)
+			s.metrics.llmRequestsTotal.WithLabelValues(provider, "error").Inc()
 			return finalResponse, finalThinkingB.String(), lastInputTokens, totalOutputTokens, fmt.Errorf("LLM stream error: %w", err)
 		}
 
 		var (
-			iterContent  strings.Builder
-			iterThinking strings.Builder
-			toolUse      *llm.ToolUse
+			iterContent          strings.Builder
+			iterThinking         strings.Builder
+			iterOutputTokens     int
+			toolUse              *llm.ToolUse
+			inputAnonymizations  []presidio.AnonymizationRecord
+			outputAnonymizations []presidio.AnonymizationRecord
 		)
 
 		for chunk := range responseChan {
 			if chunk.Error != nil {
 				return finalResponse, finalThinkingB.String(), lastInputTokens, totalOutputTokens, fmt.Errorf("stream error: %w", chunk.Error)
 			}
+			// Collect anonymization metadata delivered on the Done chunk.
+			if chunk.Done {
+				if len(chunk.InputAnonymizations) > 0 && inputAnonymizations == nil {
+					inputAnonymizations = chunk.InputAnonymizations
+				}
+				outputAnonymizations = append(outputAnonymizations, chunk.OutputAnonymizations...)
+			}
+
 			if chunk.Content != "" {
 				iterContent.WriteString(chunk.Content)
 				sendEvent(agentproto.Event{
@@ -150,6 +185,7 @@ func runAgenticLoop(
 			}
 			if chunk.Done {
 				lastInputTokens = chunk.InputTokens
+				iterOutputTokens = chunk.OutputTokens
 				totalOutputTokens += chunk.OutputTokens
 				if s.agentDB != nil && sess.userID != "" && chunk.InputTokens > 0 {
 					providerName := "default"
@@ -159,6 +195,25 @@ func runAgenticLoop(
 					_ = s.agentDB.RecordTokens(ctx, sess.userID, sess.id, providerName, "", chunk.InputTokens, chunk.OutputTokens)
 				}
 			}
+		}
+
+		// Emit anonymization event when the sidecar reported any activity.
+		if len(inputAnonymizations) > 0 || len(outputAnonymizations) > 0 {
+			sendEvent(agentproto.Event{
+				Type: agentproto.EventTypeAnonymization,
+				Anonymization: &agentproto.AnonymizationEvent{
+					InputAnonymizations:  inputAnonymizations,
+					OutputAnonymizations: outputAnonymizations,
+				},
+			})
+		}
+		s.metrics.llmRequestDuration.WithLabelValues(provider).Observe(time.Since(llmStart).Seconds())
+		s.metrics.llmRequestsTotal.WithLabelValues(provider, "success").Inc()
+		if lastInputTokens > 0 {
+			s.metrics.llmInputTokens.WithLabelValues(provider).Add(float64(lastInputTokens))
+		}
+		if iterOutputTokens > 0 {
+			s.metrics.llmOutputTokens.WithLabelValues(provider).Add(float64(iterOutputTokens))
 		}
 		s.runPostLLM(ctx, sess.id, iterContent.String(), iterThinking.String())
 
@@ -268,6 +323,18 @@ func runAgenticLoop(
 	return finalResponse, finalThinking, lastInputTokens, totalOutputTokens, nil
 }
 
+// effectiveProvider returns the provider name to use for metric labels.
+// Prefers the per-session override, falls back to the config default.
+func effectiveProvider(s *Server, overrides *llm.Overrides) string {
+	if overrides != nil && overrides.Provider != nil {
+		return *overrides.Provider
+	}
+	if dp := s.cfg.LLM.DefaultProvider(); dp != nil {
+		return dp.Name
+	}
+	return "unknown"
+}
+
 // sessionListTool returns the list_tools tool as an llm.Tool slice for use as the
 // initial restricted tool set. Called with sess.mu held.
 func sessionListTool(sess *Session) []llm.Tool {
@@ -294,6 +361,7 @@ func executeToolCall(
 	iteration int,
 ) (string, bool, error) {
 	logging.Infof("agentd: tool call %q (iteration %d, session %s)", toolUse.Name, iteration+1, sess.id)
+	toolStart := time.Now()
 
 	// Parse parameters for display and registry.
 	var params map[string]interface{}
@@ -310,6 +378,7 @@ func executeToolCall(
 		tool, ok = s.skillRegistry.GetTool(toolUse.Name)
 	}
 	if !ok {
+		s.metrics.toolCallsTotal.WithLabelValues(toolUse.Name, "not_found").Inc()
 		errMsg := fmt.Sprintf("Tool '%s' does not exist. Use only tools listed in your system prompt.", toolUse.Name)
 		logging.Warnf("agentd: tool not found: %s", toolUse.Name)
 
@@ -325,11 +394,14 @@ func executeToolCall(
 
 	// Execute the tool.
 	result, err := tool.Execute(ctx, json.RawMessage(toolUse.Parameters))
+	s.metrics.toolCallDuration.WithLabelValues(toolUse.Name).Observe(time.Since(toolStart).Seconds())
 	if err != nil {
+		s.metrics.toolCallsTotal.WithLabelValues(toolUse.Name, "error").Inc()
 		return "", false, fmt.Errorf("tool execution failed: %w", err)
 	}
 
 	if !result.Success {
+		s.metrics.toolCallsTotal.WithLabelValues(toolUse.Name, "error").Inc()
 		logging.Warnf("agentd: tool %s returned error: %s", toolUse.Name, result.Error)
 
 		sess.mu.Lock()
@@ -342,6 +414,7 @@ func executeToolCall(
 		return "ERROR: " + result.Error, true, nil
 	}
 
+	s.metrics.toolCallsTotal.WithLabelValues(toolUse.Name, "success").Inc()
 	logging.Infof("agentd: tool %s returned %d bytes", toolUse.Name, len(result.Content))
 
 	// Truncate oversized results to protect the LLM context window.

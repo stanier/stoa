@@ -4,75 +4,58 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/stanier/stoa/internal/agents"
 	"github.com/stanier/stoa/internal/skills"
 )
 
-// KillCommand terminates an agent
-type KillCommand struct {
-	manager *agents.Manager
+// KillCommand cancels a running sub-agent by ID or name.
+type KillCommand struct{}
+
+// NewKillCommand creates a new kill command.
+func NewKillCommand() *KillCommand {
+	return &KillCommand{}
 }
 
-// NewKillCommand creates a new kill command
-func NewKillCommand(manager *agents.Manager) *KillCommand {
-	return &KillCommand{manager: manager}
-}
+func (c *KillCommand) Name() string        { return "kill" }
+func (c *KillCommand) Description() string { return "Cancel a running sub-agent by ID or name" }
 
-// Name returns the command name
-func (c *KillCommand) Name() string {
-	return "kill"
-}
-
-// Description returns the command description
-func (c *KillCommand) Description() string {
-	return "Terminate an agent by ID or name"
-}
-
-// Usage returns usage instructions
 func (c *KillCommand) Usage() string {
-	return `/kill <agent-id or name>
+	return `/kill <agent-id>
 
-Example: /kill Coder-12345678`
+Example: /kill 550e8400-e29b-41d4-a716-446655440000`
 }
 
-// Execute runs the command
 func (c *KillCommand) Execute(ctx context.Context, args []string, state *skills.CommandState) (skills.CommandResult, error) {
+	if state.AgentController == nil {
+		return skills.CommandResult{Success: false, Message: "Agent management not available (not yet connected)"}, nil
+	}
 	if len(args) < 1 {
-		return skills.CommandResult{
-			Success: false,
-			Message: c.Usage(),
-		}, nil
+		return skills.CommandResult{Success: false, Message: c.Usage()}, nil
 	}
 
 	identifier := args[0]
 
-	// Try to find agent by ID or name
-	var agentID string
-	var agentName string
-	for _, agent := range c.manager.ListAgents() {
-		if agent.ID() == identifier || agent.Name() == identifier {
-			agentID = agent.ID()
-			agentName = agent.Name()
+	// Resolve name → ID if needed.
+	agentID := identifier
+	agents, err := state.AgentController.ListSubAgents(ctx)
+	if err != nil {
+		return skills.CommandResult{Success: false, Message: fmt.Sprintf("Failed to list agents: %v", err)}, err
+	}
+	for _, a := range agents {
+		if a.Name == identifier {
+			agentID = a.ID
 			break
 		}
 	}
 
-	if agentID == "" {
+	if err := state.AgentController.KillSubAgent(ctx, agentID); err != nil {
 		return skills.CommandResult{
 			Success: false,
-			Message: fmt.Sprintf("Agent not found: %s\n\nUse /agents to see active agents", identifier),
-		}, nil
-	}
-
-	if err := c.manager.Kill(agentID); err != nil {
-		return skills.CommandResult{
-			Success: false,
-			Message: fmt.Sprintf("Failed to kill agent: %v", err),
+			Message: fmt.Sprintf("Failed to kill agent %s: %v\n\nUse /agents to see active agents", identifier, err),
 		}, err
 	}
 
 	return skills.CommandResult{
 		Success: true,
-		Message: fmt.Sprintf("✓ Killed agent: %s", agentName),
+		Message: fmt.Sprintf("Cancelled sub-agent: %s", agentID),
 	}, nil
 }

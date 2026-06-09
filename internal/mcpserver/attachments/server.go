@@ -80,8 +80,9 @@ func (s *Server) ListTools(_ context.Context) ([]mcpserver.Tool, error) {
 		{
 			Name: "read_attachment",
 			Description: "Read the content of an uploaded file attachment. " +
-				"Use this tool when a message contains an attachment reference like (attachment: ID). " +
-				"Pass the attachment ID exactly as it appears — do not modify it.",
+				"Use this tool when a message contains a line like " +
+				"\"- filename (call read_attachment with attachment_id=..., size: ... bytes)\". " +
+				"Pass the attachment_id value exactly as it appears — do not modify it.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -112,7 +113,7 @@ func (s *Server) handleReadAttachment(ctx context.Context, args map[string]inter
 		return mcpserver.ErrorResult("attachment_id is required"), nil
 	}
 
-	s3Key, err := parseAttachmentID(s.cfg.Secret, s.cfg.S3Bucket, id)
+	s3Key, err := parseAttachmentID(s.cfg.Secret, id)
 	if err != nil {
 		return mcpserver.ErrorResult("invalid attachment ID: " + err.Error()), nil
 	}
@@ -147,8 +148,8 @@ func (s *Server) handleReadAttachment(ctx context.Context, args map[string]inter
 }
 
 // parseAttachmentID validates the HMAC and returns the S3 key encoded in the ID.
-// Format: hex(hmac_sha256(secret, bucket+":"+key)[:8]) + "." + base64url(key)
-func parseAttachmentID(secret []byte, bucket, id string) (string, error) {
+// Format: hex(hmac_sha256(secret, key)[:8]) + "." + base64url(key)
+func parseAttachmentID(secret []byte, id string) (string, error) {
 	parts := strings.SplitN(id, ".", 2)
 	if len(parts) != 2 || len(parts[0]) != 16 {
 		return "", errors.New("malformed attachment ID")
@@ -163,7 +164,7 @@ func parseAttachmentID(secret []byte, bucket, id string) (string, error) {
 	}
 
 	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(bucket + ":" + string(keyBytes)))
+	mac.Write([]byte(string(keyBytes)))
 	if !hmac.Equal(expectedMAC, mac.Sum(nil)[:8]) {
 		return "", errors.New("signature mismatch")
 	}

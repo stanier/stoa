@@ -42,6 +42,14 @@ func (m *mockClient) ListModels(_ context.Context) ([]string, error) {
 	return []string{"model-a"}, nil
 }
 
+func (m *mockClient) ListModelInfo(_ context.Context) ([]ModelInfo, error) {
+	m.called++
+	if m.sendErr != nil {
+		return nil, m.sendErr
+	}
+	return []ModelInfo{{ID: "model-a"}}, nil
+}
+
 // buildRegistryWithMocks creates a ProviderRegistry pre-populated with named mock clients.
 func buildRegistryWithMocks(entries map[string]*mockClient) *ProviderRegistry {
 	r := &ProviderRegistry{

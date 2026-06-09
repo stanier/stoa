@@ -5,7 +5,20 @@ import (
 	"encoding/json"
 
 	"github.com/stanier/stoa/internal/chat"
+	"github.com/stanier/stoa/internal/presidio"
 )
+
+// ModelInfo describes a model returned by a provider, with normalized capability flags.
+// Capabilities absent from a provider's API are left as false (unknown ≠ unsupported,
+// but callers should treat false as "not confirmed supported").
+type ModelInfo struct {
+	ID                string
+	Vision            bool // image / vision input
+	ToolUse           bool // function / tool calling
+	Thinking          bool // extended reasoning / thinking
+	PDFInput          bool
+	StructuredOutputs bool
+}
 
 // Client is the interface for LLM providers
 type Client interface {
@@ -17,9 +30,14 @@ type Client interface {
 	// tools parameter is optional - pass nil or empty slice if not using tools
 	StreamMessage(ctx context.Context, messages []chat.Message, tools []Tool) (<-chan StreamChunk, error)
 
-	// ListModels returns the models available from this provider.
+	// ListModels returns the model IDs available from this provider.
 	// May return a static list or call the provider API.
 	ListModels(ctx context.Context) ([]string, error)
+
+	// ListModelInfo returns models with normalized capability metadata.
+	// Implementations that cannot source capability data return ModelInfo with
+	// only the ID set; callers treat absent capability flags as "not declared".
+	ListModelInfo(ctx context.Context) ([]ModelInfo, error)
 }
 
 // Tool represents an LLM tool definition
@@ -47,4 +65,10 @@ type StreamChunk struct {
 	InputTokens  int    // Populated on Done chunk: tokens consumed by the prompt
 	OutputTokens int    // Populated on Done chunk: tokens in the generated response
 	StopSequence string // Populated on Done chunk if a stop sequence triggered completion
+
+	// PII anonymization metadata from the sidecar. Non-nil only when pii-filter is
+	// active. InputAnonymizations is set on the first chunk per request;
+	// OutputAnonymizations lists substitutions made in this specific chunk.
+	InputAnonymizations  []presidio.AnonymizationRecord
+	OutputAnonymizations []presidio.AnonymizationRecord
 }

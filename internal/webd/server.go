@@ -6,16 +6,12 @@
 package webd
 
 import (
-	"embed"
 	"io/fs"
 	"net/http"
 	"strings"
 
 	"github.com/gorilla/websocket"
 )
-
-//go:embed all:dist
-var staticFiles embed.FS
 
 // Server is the webd HTTP server.
 type Server struct {
@@ -55,8 +51,28 @@ func NewServer(cfg *Config) (*Server, error) {
 	return s, nil
 }
 
-// Router returns the HTTP handler.
-func (s *Server) Router() http.Handler { return s.mux }
+// Router returns the HTTP handler wrapped with security headers and CSRF protection.
+func (s *Server) Router() http.Handler { return securityHeaders(csrfMiddleware(s.mux)) }
+
+// securityHeaders adds defensive HTTP headers to every response.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		// Svelte injects inline styles; everything else is same-origin only.
+		h.Set("Content-Security-Policy",
+			"default-src 'self'; "+
+				"script-src 'self'; "+
+				"style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data: blob:; "+
+				"connect-src 'self' ws: wss:; "+
+				"font-src 'self'; "+
+				"object-src 'none'; "+
+				"frame-ancestors 'none'")
+		next.ServeHTTP(w, r)
+	})
+}
 
 func (s *Server) registerRoutes() {
 	// Auth endpoints — no session required.
@@ -78,6 +94,8 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("/api/apikeys/", s.requireAuth(http.HandlerFunc(s.handleAPIKeysProxy)))
 	s.mux.Handle("/api/agents", s.requireAuth(http.HandlerFunc(s.handleAgentsProxy)))
 	s.mux.Handle("/api/agents/", s.requireAuth(http.HandlerFunc(s.handleAgentsProxy)))
+	s.mux.Handle("/api/projects", s.requireAuth(http.HandlerFunc(s.handleProjectsProxy)))
+	s.mux.Handle("/api/projects/", s.requireAuth(http.HandlerFunc(s.handleProjectsProxy)))
 
 	// WebSocket proxy — session validated inside handler.
 	s.mux.HandleFunc("/ws/", s.handleWSProxy)

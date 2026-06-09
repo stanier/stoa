@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
+	"time"
 
 	"github.com/stanier/stoa/internal/authd"
+	"github.com/stanier/stoa/internal/daemon"
 	"github.com/stanier/stoa/internal/logging"
 )
 
@@ -44,7 +44,7 @@ func main() {
 	}
 
 	logCfg := logging.Config{
-		Level:  logging.LogLevel(resolveStr(*logLevel, "info")),
+		Level:  logging.LogLevel(daemon.ResolveStr(*logLevel, "info")),
 		LogFile: *logFile,
 		Pretty: true,
 	}
@@ -53,7 +53,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	extURL := resolveStr(*externalURL, os.Getenv("AUTHD_EXTERNAL_URL"))
+	extURL := daemon.ResolveStr(*externalURL, os.Getenv("AUTHD_EXTERNAL_URL"))
 	if extURL == "" {
 		logging.Warn("authd: AUTHD_EXTERNAL_URL not set — OAuth2 callbacks will not work")
 	}
@@ -72,26 +72,6 @@ func main() {
 		Addr:    addr,
 		Handler: srv.Router(),
 	}
-
-	go func() {
-		logging.Infof("authd: listening on %s (external: %s)", addr, extURL)
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logging.Errorf("authd: server error: %v", err)
-			os.Exit(1)
-		}
-	}()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	<-sigCh
-
-	logging.Info("authd: shutting down")
-	_ = httpSrv.Close()
-}
-
-func resolveStr(flagVal, envVal string) string {
-	if flagVal != "" {
-		return flagVal
-	}
-	return envVal
+	logging.Infof("authd: listening on %s (external: %s)", addr, extURL)
+	daemon.ServeHTTP("authd", httpSrv, 10*time.Second, "", "")
 }

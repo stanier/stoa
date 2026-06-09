@@ -39,9 +39,13 @@ func handleKeyEsc(m Model) (Model, tea.Cmd) {
 }
 
 func handleKeyCtrlC(m Model) (Model, tea.Cmd) {
-	// Don't quit on Ctrl+C to allow terminal copy-paste
-	// If the user really wants to quit, they can use Ctrl+Q or ESC (in main chat)
-	return m, nil
+	if m.ctrlCPending {
+		return m, m.quit()
+	}
+	m.ctrlCPending = true
+	return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+		return ctrlCResetMsg{}
+	})
 }
 
 func handleKeyCtrlQ(m Model) (Model, tea.Cmd) {

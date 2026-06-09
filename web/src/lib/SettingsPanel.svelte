@@ -1,4 +1,7 @@
 <script>
+  import SidePanel from './SidePanel.svelte'
+  import { apiFetch } from './utils.js'
+
   let { sessionId, open = $bindable(false) } = $props()
 
   let config    = $state({})
@@ -14,7 +17,7 @@
     }
   })
 
-  let availableModels = $derived(() => {
+  let availableModels = $derived.by(() => {
     if (!config.provider) return providers.flatMap(p => p.models)
     const p = providers.find(p => p.name === config.provider)
     return p ? p.models : []
@@ -51,7 +54,7 @@
       if (config.provider       != null) patch.provider                = config.provider
       if (config.model          != null) patch.model                   = config.model
 
-      await fetch(`/api/sessions/${sessionId}/config`, {
+      await apiFetch(`/api/sessions/${sessionId}/config`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patch),
@@ -89,37 +92,6 @@
 </script>
 
 <style>
-  .panel {
-    position: absolute;
-    inset: 0;
-    height: 100%;
-    background: var(--sidebar);
-    display: flex;
-    flex-direction: column;
-    overflow-y: auto;
-  }
-
-  .panel-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.65rem 0.75rem;
-    flex-shrink: 0;
-  }
-  .panel-title {
-    font-size: 0.72rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text4);
-  }
-  button.close {
-    background: none; border: none; color: var(--text4); cursor: pointer;
-    font-size: 1rem; padding: 0; line-height: 1;
-    transition: color 0.15s;
-  }
-  button.close:hover { color: var(--text); }
-
   .fields { padding: 0.75rem; display: flex; flex-direction: column; gap: 1rem; }
 
   .field { display: flex; flex-direction: column; gap: 0.3rem; }
@@ -181,7 +153,7 @@
   }
   button.save-btn:hover:not(:disabled) { background: var(--accent-light); }
   button.save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  button.save-btn.ok { background: #166534; color: #fff; }
+  button.save-btn.ok { background: var(--success-bg); color: #fff; }
   button.reset-btn {
     background: none; border: 1px solid var(--border); color: var(--text3);
     border-radius: 6px; font-size: 0.8rem; padding: 0.45rem 0.65rem;
@@ -190,18 +162,13 @@
   button.reset-btn:hover { color: var(--text); border-color: var(--text4); }
 </style>
 
-<div class="panel">
-  <div class="panel-header">
-    <span class="panel-title">Model &amp; Params</span>
-    <button class="close" onclick={() => open = false}>✕</button>
-  </div>
-
+<SidePanel title="Model & Params" bind:open>
   <div class="fields">
 
     {#if providers.length > 0}
       <div class="field">
-        <label>Provider</label>
-        <select value={config.provider ?? ''} onchange={onProviderChange}>
+        <label for="sp-provider">Provider</label>
+        <select id="sp-provider" value={config.provider ?? ''} onchange={onProviderChange}>
           <option value="">default</option>
           {#each providers.filter(p => p.name !== 'default') as p}
             <option value={p.name}>{p.name}</option>
@@ -210,10 +177,10 @@
       </div>
 
       <div class="field">
-        <label>Model</label>
-        <select value={config.model ?? ''} onchange={onModelChange}>
+        <label for="sp-model">Model</label>
+        <select id="sp-model" value={config.model ?? ''} onchange={onModelChange}>
           <option value="">default</option>
-          {#each availableModels() as m}
+          {#each availableModels as m}
             <option value={m}>{m}</option>
           {/each}
         </select>
@@ -223,30 +190,30 @@
     {/if}
 
     <div class="field">
-      <label>
+      <label for="sp-temperature">
         Temperature
         <span>{config.temperature != null ? config.temperature.toFixed(2) : 'default'}</span>
       </label>
-      <input type="range" min="0" max="2" step="0.01"
+      <input id="sp-temperature" type="range" min="0" max="2" step="0.01"
         value={config.temperature ?? 1}
         oninput={e => { config.temperature = asFloat(e.target.value); mark() }}
       />
     </div>
 
     <div class="field">
-      <label>
+      <label for="sp-top-p">
         Top-P
         <span>{config.top_p != null ? config.top_p.toFixed(2) : 'default'}</span>
       </label>
-      <input type="range" min="0" max="1" step="0.01"
+      <input id="sp-top-p" type="range" min="0" max="1" step="0.01"
         value={config.top_p ?? 1}
         oninput={e => { config.top_p = asFloat(e.target.value); mark() }}
       />
     </div>
 
     <div class="field">
-      <label>Max tokens</label>
-      <input type="number" min="1" max="200000" step="256"
+      <label for="sp-max-tokens">Max tokens</label>
+      <input id="sp-max-tokens" type="number" min="1" max="200000" step="256"
         value={config.max_tokens ?? ''}
         placeholder="default"
         oninput={e => { config.max_tokens = asInt(e.target.value); mark() }}
@@ -254,8 +221,8 @@
     </div>
 
     <div class="field">
-      <label>Top-K <span style="font-size:0.65rem;color:var(--text5)">(Anthropic)</span></label>
-      <input type="number" min="1" max="2048" step="1"
+      <label for="sp-top-k">Top-K <span style="font-size:0.65rem;color:var(--text5)">(Anthropic)</span></label>
+      <input id="sp-top-k" type="number" min="1" max="2048" step="1"
         value={config.top_k ?? ''}
         placeholder="default"
         oninput={e => { config.top_k = asInt(e.target.value); mark() }}
@@ -288,8 +255,8 @@
 
     {#if config.enable_thinking || config.enable_oai_thinking}
       <div class="field">
-        <label>Thinking budget tokens</label>
-        <input type="number" min="1024" max="100000" step="1024"
+        <label for="sp-thinking-budget">Thinking budget tokens</label>
+        <input id="sp-thinking-budget" type="number" min="1024" max="100000" step="1024"
           value={config.thinking_budget_tokens ?? 10000}
           oninput={e => { config.thinking_budget_tokens = asInt(e.target.value); mark() }}
         />
@@ -311,4 +278,4 @@
       {saved ? '✓ Saved' : saving ? 'Saving…' : 'Apply'}
     </button>
   </div>
-</div>
+</SidePanel>

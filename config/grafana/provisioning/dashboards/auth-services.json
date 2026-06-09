@@ -1,0 +1,263 @@
+{
+  "uid": "stoa-auth-services",
+  "title": "Auth Services (authd + apikeyd)",
+  "tags": ["stoa"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "authd",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+    {
+      "id": 2,
+      "title": "authd — Request Rate by Path",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2 },
+          "unit": "reqps"
+        }
+      },
+      "options": { "legend": { "displayMode": "list" } },
+      "targets": [
+        {
+          "expr": "sum by (path) (rate(authd_http_requests_total[5m]))",
+          "legendFormat": "{{path}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "authd — Error Rate (4xx + 5xx)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2 },
+          "unit": "reqps"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (path) (rate(authd_http_requests_total{status=~\"[45]..\"}[5m]))",
+          "legendFormat": "{{path}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "authd — Request Latency p50 / p95",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2 },
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (path, le) (rate(authd_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{path}} p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (path, le) (rate(authd_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{path}} p95"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "authd — Token Verify Rate (key path)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "sum(rate(authd_http_requests_total{path=\"/token/verify\"}[5m]))",
+          "legendFormat": "verify/s"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "authd — Login Starts / 5m",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "sum(increase(authd_http_requests_total{path=\"/oauth/login\",method=\"POST\"}[5m]))",
+          "legendFormat": "logins"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "apikeyd",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+      "collapsed": false
+    },
+    {
+      "id": 11,
+      "title": "apikeyd — Request Rate by Path",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2 },
+          "unit": "reqps"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (path) (rate(apikeyd_http_requests_total[5m]))",
+          "legendFormat": "{{path}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "apikeyd — Error Rate (4xx + 5xx)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2 },
+          "unit": "reqps"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (path) (rate(apikeyd_http_requests_total{status=~\"[45]..\"}[5m]))",
+          "legendFormat": "{{path}}"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "apikeyd — Request Latency p50 / p95",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2 },
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (path, le) (rate(apikeyd_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{path}} p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (path, le) (rate(apikeyd_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{path}} p95"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "apikeyd — Key Verify Rate",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 26 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps" }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "sum(rate(apikeyd_http_requests_total{path=\"/keys/verify\"}[5m]))",
+          "legendFormat": "verify/s"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "apikeyd — Keys Created / 5m",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 26 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "sum(increase(apikeyd_http_requests_total{path=\"/api/keys\",method=\"POST\",status=\"200\"}[5m]))",
+          "legendFormat": "created"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Go Runtime",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 },
+      "collapsed": true,
+      "panels": [
+        {
+          "id": 21,
+          "title": "Goroutines",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 35 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "targets": [
+            {
+              "expr": "go_goroutines{job=~\"authd|apikeyd\"}",
+              "legendFormat": "{{job}}"
+            }
+          ]
+        },
+        {
+          "id": 22,
+          "title": "Heap Memory",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 35 },
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "fieldConfig": { "defaults": { "unit": "bytes" } },
+          "targets": [
+            {
+              "expr": "go_memstats_heap_alloc_bytes{job=~\"authd|apikeyd\"}",
+              "legendFormat": "{{job}} heap alloc"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "pluginId": "prometheus",
+        "label": "Datasource",
+        "hide": 0
+      }
+    ]
+  }
+}

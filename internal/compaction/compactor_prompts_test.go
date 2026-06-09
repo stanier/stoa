@@ -243,6 +243,10 @@ func (m *mockLLMClient) StreamMessage(ctx context.Context, messages []chat.Messa
 	close(ch)
 	return ch, nil
 }
+func (m *mockLLMClient) ListModels(_ context.Context) ([]string, error) { return nil, nil }
+func (m *mockLLMClient) ListModelInfo(_ context.Context) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
 
 func newMockLLMClient() *mockLLMClient {
 	return &mockLLMClient{}

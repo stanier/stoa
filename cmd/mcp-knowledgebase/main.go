@@ -15,6 +15,7 @@ const (
 )
 
 func main() {
+	f           := mcpserver.RegisterCommonFlags()
 	dir         := flag.String("dir", "", "Directory of Markdown documents to index (required)")
 	indexPath   := flag.String("index", "", "Path to the persistent index file (default: <dir>/.kb-index.json)")
 	embedURL    := flag.String("embed-url", "", "Base URL of an OpenAI-compatible embeddings API, e.g. http://localhost:11434 for Ollama (omit for BM25-only search)")
@@ -22,11 +23,9 @@ func main() {
 	embedAPIKey := flag.String("embed-api-key", "", "API key for the embedding endpoint (optional)")
 	bm25Weight  := flag.Float64("bm25-weight", 0.3, "BM25 weight in hybrid scoring (0.0 = pure semantic, 1.0 = pure BM25)")
 	topK        := flag.Int("top-k", 5, "Default number of search results to return")
-	logFile     := flag.String("log", "", "Log file path (empty for stderr)")
-	pingTimeout := flag.Duration("ping-timeout", 0, "Shut down if no ping received within this duration (0 = disabled)")
 	flag.Parse()
 
-	mcpserver.SetupLogging(*logFile)
+	mcpserver.SetupLogging(*f.LogFile)
 	log.Printf("Starting %s v%s", serverName, serverVersion)
 
 	if *dir == "" {
@@ -57,8 +56,5 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create knowledgebase server: %v", err)
 	}
-
-	if err := mcpserver.RunServer(context.Background(), srv, *pingTimeout); err != nil {
-		log.Fatalf("Server error: %v", err)
-	}
+	mcpserver.Serve(srv, f)
 }

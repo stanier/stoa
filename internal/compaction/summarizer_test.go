@@ -23,6 +23,10 @@ func (m *mockLLMClientSum) SendMessage(ctx context.Context, messages []chat.Mess
 func (m *mockLLMClientSum) StreamMessage(ctx context.Context, messages []chat.Message, tools []llm.Tool) (<-chan llm.StreamChunk, error) {
 	return nil, nil
 }
+func (m *mockLLMClientSum) ListModels(_ context.Context) ([]string, error) { return nil, nil }
+func (m *mockLLMClientSum) ListModelInfo(_ context.Context) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
 
 // mockTokenCounterSum is a mock token counter for testing
 type mockTokenCounterSum struct {

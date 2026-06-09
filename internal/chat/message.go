@@ -26,7 +26,7 @@ type Message struct {
 	Role      Role
 	Content   string
 	Thinking  string    `json:"thinking,omitempty"`
-	Timestamp time.Time
+	Timestamp time.Time `json:"CreatedAt,omitempty"`
 	// Tool-specific metadata
 	ToolName    string // Name of the tool (for RoleTool messages)
 	ToolUseID   string // Tool use ID (for RoleTool messages)

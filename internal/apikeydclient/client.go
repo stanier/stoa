@@ -20,7 +20,7 @@ var (
 )
 
 // ProvisionedKey is returned by ProvisionUserKey on success.
-// The raw Key is the llmp_* value — store it; it will not be returned again
+// The raw Key is the stoa-infgw_* value — store it; it will not be returned again
 // for an existing key.
 type ProvisionedKey struct {
 	Key       string `json:"key"`
@@ -134,7 +134,7 @@ func (c *Client) verify(ctx context.Context, rawKey string) (*KeyInfo, error) {
 
 // ProvisionUserKey calls the admin endpoint to rotate (revoke-and-recreate) the
 // service key for userID. adminToken must match APIKEYD_ADMIN_TOKEN on the server.
-// The returned ProvisionedKey.Key is the raw llmp_* value — the caller must
+// The returned ProvisionedKey.Key is the raw stoa-infgw_* value — the caller must
 // cache it; subsequent calls for the same user will rotate the key.
 func (c *Client) ProvisionUserKey(ctx context.Context, userID, adminToken string) (*ProvisionedKey, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,

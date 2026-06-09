@@ -3,6 +3,7 @@
   import SettingsPanel from './SettingsPanel.svelte'
   import ToolsPanel from './ToolsPanel.svelte'
   import ModelPicker from './ModelPicker.svelte'
+  import { apiFetch } from './utils.js'
   import { marked } from 'marked'
   import hljs from 'highlight.js/lib/core'
   import langBash       from 'highlight.js/lib/languages/bash'
@@ -91,16 +92,14 @@
     })
   }
 
-  let { user, sessionId, sessionTitle = '', onSessionEnd, onTitleUpdate, active = true } = $props()
+  let { user, sessionId, sessionTitle = '', onSessionEnd, onTitleUpdate, active = true,
+        settingsOpen = $bindable(false), toolsOpen = $bindable(false) } = $props()
 
   // When this session becomes the active view, scroll to the latest message.
   $effect(() => { if (active) scrollToBottom() })
 
   let liveTitle = $state(sessionTitle)
   $effect(() => { liveTitle = sessionTitle })
-
-  let settingsOpen  = $state(false)
-  let toolsOpen     = $state(false)
   let messages      = $state([])
   let input         = $state('')
   let connected     = $state(false)
@@ -118,7 +117,7 @@
     if (!destroyed) openWS()
   })
 
-  // S3 mode: agent calls read_attachment(attachment_id); local fallback uses filesystem path.
+  // Legacy prefixes emitted by older clients — kept only for history display.
   const ATTACH_PREFIX_ID   = '[Attachments — use read_attachment to read them]\n'
   const ATTACH_PREFIX_PATH = '[Attachments — use mcp_filesystem_read_file to read them]\n'
 
@@ -341,6 +340,20 @@
         if (ev.error?.fatal) { connected = false; onSessionEnd?.() }
         break
       }
+
+      case 'anonymization': {
+        const anonEv = ev.anonymization
+        if (!anonEv) break
+        if (anonEv.input_anonymizations?.length) {
+          const lastUser = messages.findLast(m => m.kind === 'user')
+          if (lastUser) { lastUser.inputAnonymizations = anonEv.input_anonymizations; messages = messages }
+        }
+        if (anonEv.output_anonymizations?.length) {
+          const lastAsst = messages.findLast(m => m.kind === 'assistant')
+          if (lastAsst) { lastAsst.outputAnonymizations = anonEv.output_anonymizations; messages = messages }
+        }
+        break
+      }
     }
   }
 
@@ -353,10 +366,10 @@
       const form = new FormData()
       form.append('file', file)
       try {
-        const res = await fetch('/api/upload', { method: 'POST', body: form })
+        const res = await apiFetch('/api/upload', { method: 'POST', body: form })
         if (!res.ok) { error = `Upload failed: ${file.name}`; continue }
         const data = await res.json()
-        pendingFiles = [...pendingFiles, { name: data.name, attachmentId: data.attachment_id, path: data.path, size: data.size }]
+        pendingFiles = [...pendingFiles, { name: data.name, attachmentId: data.attachment_id, path: data.path, size: data.size, mimeType: file.type }]
       } catch (e) {
         error = `Upload error: ${file.name}`
       }
@@ -380,24 +393,23 @@
     if ((!text && !pendingFiles.length) || !connected || permRequest) return
     input = ''
 
-    let content = text
-    let sentAttachments = []
-    if (pendingFiles.length) {
-      sentAttachments = [...pendingFiles]
-      const hasId = pendingFiles.some(f => f.attachmentId)
-      const prefix = hasId ? ATTACH_PREFIX_ID : ATTACH_PREFIX_PATH
-      const refs = pendingFiles.map(f => {
-        const refType = f.attachmentId ? 'attachment' : 'path'
-        const ref     = f.attachmentId || f.path
-        return `- ${f.name} (${refType}: ${ref}, size: ${fmtSize(f.size)})`
-      }).join('\n')
-      content = text ? `${prefix}${refs}\n\n${text}` : `${prefix}${refs}`
-      pendingFiles = []
-    }
+    const sentAttachments = [...pendingFiles]
+    pendingFiles = []
+
+    const attachments = sentAttachments.map(f => ({
+      name:          f.name,
+      mime_type:     f.mimeType || 'application/octet-stream',
+      attachment_id: f.attachmentId || undefined,
+      path:          f.path || undefined,
+      size:          f.size,
+    }))
+
+    const payload = { content: text }
+    if (attachments.length) payload.attachments = attachments
 
     messages = [...messages, { kind: 'user', content: text || '', attachments: sentAttachments.map(f => ({ name: f.name, attachmentId: f.attachmentId, path: f.path, size: fmtSize(f.size) })) }]
     scrollToBottom()
-    ws.send(JSON.stringify({ type: 'send_message', send_message: { content } }))
+    ws.send(JSON.stringify({ type: 'send_message', send_message: payload }))
     onSessionEnd?.()
   }
 
@@ -435,9 +447,88 @@
       return String(params)
     }
   }
+
+  // ── PII highlighting ─────────────────────────────────────────────────────
+
+  const PII_COLORS = {
+    'person':          'var(--pii-person)',
+    'email-address':   'var(--pii-email)',
+    'phone-number':    'var(--pii-phone)',
+    'credit-card':     'var(--pii-credit)',
+    'ip-address':      'var(--pii-ip)',
+    'location':        'var(--pii-location)',
+    'iban-code':       'var(--pii-credit)',
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  }
+
+  // Wraps occurrences of each record.original in text with a <mark> span.
+  // text must already be safe to embed as HTML (i.e. either HTML-escaped or
+  // it is markdown that will be re-processed by marked).
+  function applyPIIMarks(text, records) {
+    if (!records?.length) return text
+    // Longest originals first so shorter substrings don't prevent longer matches.
+    const sorted = [...records].sort((a, b) => (b.original?.length ?? 0) - (a.original?.length ?? 0))
+    for (const r of sorted) {
+      if (!r.original) continue
+      const entityClass = (r.entity_type ?? 'unknown').toLowerCase().replace(/_/g, '-')
+      const label = r.entity_type ?? 'PII'
+      const re = new RegExp(r.original.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')
+      text = text.replace(re, `<mark class="pii-mark pii-${entityClass}" title="${label}">${r.original}</mark>`)
+    }
+    return text
+  }
+
+  // For user message bubbles: HTML-escape the plain text then apply marks.
+  function highlightPIIText(text, records) {
+    if (!records?.length) return escapeHtml(text)
+    const escapedText = escapeHtml(text)
+    const escapedRecords = records.map(r => ({ ...r, original: escapeHtml(r.original ?? '') }))
+    return applyPIIMarks(escapedText, escapedRecords)
+  }
+
+  // For assistant markdown: inject marks into the raw markdown before rendering.
+  // marked passes raw HTML through, so <mark> tags survive the render.
+  function highlightPIIMarkdown(text, records) {
+    if (!records?.length) return text
+    return applyPIIMarks(text, records)
+  }
+
 </script>
 
 <style>
+  /* PII entity-type color palette */
+  :root {
+    --pii-person:   #f59e0b;
+    --pii-email:    #3b82f6;
+    --pii-phone:    #10b981;
+    --pii-credit:   #ef4444;
+    --pii-ip:       #8b5cf6;
+    --pii-location: #06b6d4;
+    --pii-default:  #f59e0b;
+  }
+
+  :global(.pii-mark) {
+    border-radius: 3px;
+    padding: 0 2px;
+    cursor: help;
+    background: color-mix(in srgb, var(--pii-color, var(--pii-default)) 22%, transparent);
+    outline: 1px solid color-mix(in srgb, var(--pii-color, var(--pii-default)) 55%, transparent);
+    color: inherit;
+    font-style: normal;
+  }
+  :global(.pii-person)        { --pii-color: var(--pii-person); }
+  :global(.pii-email-address) { --pii-color: var(--pii-email); }
+  :global(.pii-phone-number)  { --pii-color: var(--pii-phone); }
+  :global(.pii-credit-card)   { --pii-color: var(--pii-credit); }
+  :global(.pii-iban-code)     { --pii-color: var(--pii-credit); }
+  :global(.pii-ip-address)    { --pii-color: var(--pii-ip); }
+  :global(.pii-location)      { --pii-color: var(--pii-location); }
+
+  .bubble-user :global(.pii-mark) { color: #fff; }
+
   .outer  { display: flex; flex: 1; min-width: 0; overflow: hidden; }
   .layout { display: flex; flex-direction: column; flex: 1; min-width: 0; overflow: hidden; }
 
@@ -628,9 +719,8 @@
     border-top-color: var(--accent); border-radius: 50%;
     animation: spin .7s linear infinite;
   }
-  @keyframes spin { to { transform: rotate(360deg); } }
   .tool-result { margin-top: 0.3rem; color: var(--text3); white-space: pre-wrap; word-break: break-word; }
-  .tool-result.error { color: #fca5a5; }
+  .tool-result.error { color: var(--danger-light); }
   .tool-params { margin-top: 0.3rem; color: var(--text4); white-space: pre-wrap; word-break: break-word; font-size: 0.75rem; }
 
   .msg-compaction { display: flex; justify-content: center; }
@@ -641,8 +731,8 @@
   }
 
   .error-banner {
-    background: #3b1515; border-top: 1px solid #7f1d1d;
-    color: #fca5a5; font-size: 0.85rem; padding: 0.5rem 1.25rem; flex-shrink: 0;
+    background: var(--danger-bg); border-top: 1px solid var(--danger-btn-hover);
+    color: var(--danger-light); font-size: 0.85rem; padding: 0.5rem 1.25rem; flex-shrink: 0;
   }
 
   .modal-backdrop {
@@ -689,7 +779,7 @@
     background: none; border: none; color: var(--text4); cursor: pointer;
     padding: 0; line-height: 1; font-size: 0.75rem;
   }
-  .file-pill button:hover { color: #fca5a5; }
+  .file-pill button:hover { color: var(--danger-light); }
 
   .input-bar {
     display: flex; gap: 0.5rem; padding: 0.75rem 1.25rem;
@@ -783,7 +873,13 @@
                 {/each}
               </div>
             {/if}
-            {#if msg.content}{msg.content}{/if}
+            {#if msg.content}
+              {#if msg.inputAnonymizations?.length}
+                {@html highlightPIIText(msg.content, msg.inputAnonymizations)}
+              {:else}
+                {msg.content}
+              {/if}
+            {/if}
           </div>
         </div>
 
@@ -796,7 +892,7 @@
             </details>
           {/if}
           <div class="bubble-assistant md-content">
-            {@html renderMarkdown(msg.content)}{#if msg.streaming}<span class="cursor"></span>{/if}
+            {@html renderMarkdown(highlightPIIMarkdown(msg.content, msg.outputAnonymizations))}{#if msg.streaming}<span class="cursor"></span>{/if}
           </div>
           {#if !msg.streaming}
             {@const msgKey = i}

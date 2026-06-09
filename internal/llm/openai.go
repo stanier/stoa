@@ -9,6 +9,7 @@ import (
 
 	"github.com/stanier/stoa/internal/chat"
 	"github.com/stanier/stoa/internal/config"
+	"github.com/stanier/stoa/internal/presidio"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -62,27 +63,32 @@ func extractReasoningContent(rawJSON string) string {
 	return ""
 }
 
+// piiMetadataFromChunk extracts anonymization records from a raw chunk JSON blob.
+// The inference-gateway pii-filter sidecar emits one special SSE frame with a
+// top-level "pii_metadata" key before [DONE]. The OpenAI SDK ignores this field
+// but preserves it in RawJSON(), letting us detect it here.
+func piiMetadataFromChunk(rawJSON string) (input, output []presidio.AnonymizationRecord) {
+	if rawJSON == "" || !strings.Contains(rawJSON, "pii_metadata") {
+		return nil, nil
+	}
+	var raw struct {
+		PIIMetadata struct {
+			Input  []presidio.AnonymizationRecord `json:"input_anonymizations"`
+			Output []presidio.AnonymizationRecord `json:"output_anonymizations"`
+		} `json:"pii_metadata"`
+	}
+	if err := json.Unmarshal([]byte(rawJSON), &raw); err == nil {
+		return raw.PIIMetadata.Input, raw.PIIMetadata.Output
+	}
+	return nil, nil
+}
+
 // OpenAIClient implements the Client interface using the OpenAI API
 type OpenAIClient struct {
 	client          openai.Client
 	pc              *config.LLMProviderConfig
 	thinkingBuffer  strings.Builder // Accumulates thinking content
 	inThinkingBlock bool            // Tracks if we're inside a thinking block
-}
-
-// NewOpenAIClientSimple creates an OpenAI-compatible client with minimal parameters.
-// Useful for proxy and other lightweight consumers that don't have a full config.
-// Per-request parameters (model, maxTokens, temperature, etc.) can be passed via
-// llm.Overrides in context. httpClient may be nil to use the SDK default.
-func NewOpenAIClientSimple(apiKey, apiURL, defaultModel string, defaultMaxTokens int, httpClient *http.Client) (*OpenAIClient, error) {
-	pc := &config.LLMProviderConfig{
-		Type:      "openai",
-		APIKey:    apiKey,
-		APIURL:    apiURL,
-		Model:     defaultModel,
-		MaxTokens: defaultMaxTokens,
-	}
-	return newOpenAIClientWithHTTP(pc, httpClient)
 }
 
 // NewOpenAIClient creates a new OpenAI-compatible client from a provider config entry.
@@ -548,6 +554,7 @@ func (c *OpenAIClient) StreamMessage(ctx context.Context, messages []chat.Messag
 		toolCalls := make(map[int]*ToolUse)
 
 		var usageInputTokens, usageOutputTokens int
+		var piiInput, piiOutput []presidio.AnonymizationRecord
 
 		for stream.Next() {
 			chunk := stream.Current()
@@ -630,6 +637,14 @@ func (c *OpenAIClient) StreamMessage(ctx context.Context, messages []chat.Messag
 				usageInputTokens = int(chunk.Usage.PromptTokens)
 				usageOutputTokens = int(chunk.Usage.CompletionTokens)
 			}
+
+			// Detect pii_metadata frame emitted by the inference-gateway pii-filter sidecar.
+			if inp, out2 := piiMetadataFromChunk(chunk.RawJSON()); inp != nil || out2 != nil {
+				if inp != nil && piiInput == nil {
+					piiInput = inp
+				}
+				piiOutput = append(piiOutput, out2...)
+			}
 		}
 
 		if err := stream.Err(); err != nil {
@@ -637,11 +652,13 @@ func (c *OpenAIClient) StreamMessage(ctx context.Context, messages []chat.Messag
 			return
 		}
 
-		// Send done signal
+		// Send done signal, including any PII metadata collected from the sidecar.
 		out <- StreamChunk{
-			Done:         true,
-			InputTokens:  usageInputTokens,
-			OutputTokens: usageOutputTokens,
+			Done:                 true,
+			InputTokens:          usageInputTokens,
+			OutputTokens:         usageOutputTokens,
+			InputAnonymizations:  piiInput,
+			OutputAnonymizations: piiOutput,
 		}
 	}()
 
@@ -650,13 +667,27 @@ func (c *OpenAIClient) StreamMessage(ctx context.Context, messages []chat.Messag
 
 // ListModels returns all models available from this OpenAI-compatible endpoint.
 func (c *OpenAIClient) ListModels(ctx context.Context) ([]string, error) {
+	infos, err := c.ListModelInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(infos))
+	for i, m := range infos {
+		ids[i] = m.ID
+	}
+	return ids, nil
+}
+
+// ListModelInfo returns models from the OpenAI-compatible endpoint.
+// The OpenAI /v1/models API does not expose capability flags, so only IDs are populated.
+func (c *OpenAIClient) ListModelInfo(ctx context.Context) ([]ModelInfo, error) {
 	page, err := c.client.Models.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list models: %w", err)
 	}
-	ids := make([]string, 0, len(page.Data))
+	infos := make([]ModelInfo, 0, len(page.Data))
 	for _, m := range page.Data {
-		ids = append(ids, m.ID)
+		infos = append(infos, ModelInfo{ID: m.ID})
 	}
-	return ids, nil
+	return infos, nil
 }

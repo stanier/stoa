@@ -2,11 +2,16 @@ package agentd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stanier/stoa/internal/agentdb"
 	"github.com/stanier/stoa/internal/chat"
 	"github.com/stanier/stoa/internal/agentskills"
@@ -40,7 +45,7 @@ type Server struct {
 
 	// Auth — authdClient is set when AGENTD_AUTHD_URL is configured (production).
 	authdClient   *authdclient.Client
-	apikeydClient *apikeydclient.Client // validates external ACP caller keys (llmp_ prefix)
+	apikeydClient *apikeydclient.Client // validates external ACP caller keys (stoa-infgw_ prefix)
 
 	// loopHooks contains optional callbacks invoked during the agentic loop.
 	loopHooks LoopHooks
@@ -57,6 +62,10 @@ type Server struct {
 	// agentDB is optional Postgres persistence for sessions and messages.
 	// When nil, falls back to filesystem (AGENTD_SESSION_DIR).
 	agentDB *agentdb.DB
+
+	metrics    *Metrics
+	promReg    *prometheus.Registry
+	metricsHandler http.Handler
 
 	sessions map[string]*Session
 	mu       sync.RWMutex
@@ -97,12 +106,12 @@ func NewServer(cfg *config.Config) (*Server, error) {
 	// Build multi-provider registry with background model discovery.
 	// Refresh interval: 30 minutes (0 = startup only, no repeating).
 	// Kept for per-session provider override (overrides.Provider); fallback chain
-	// and stats are now handled by llm-proxy.
+	// and stats are now handled by inference-gateway.
 	providerReg := app.SetupProviderRegistry(cfg, context.Background(), 30*time.Minute)
 
 	// If a fallback chain is configured, wrap the default client.
-	// Note: rate limiting and stats are now in llm-proxy. FallbackClient here
-	// is only active when agentd is NOT routing through llm-proxy (e.g. direct
+	// Note: rate limiting and stats are now in inference-gateway. FallbackClient here
+	// is only active when agentd is NOT routing through inference-gateway (e.g. direct
 	// provider access in dev mode).
 	if len(cfg.Gateway.FallbackChain) > 0 {
 		fc := llm.NewFallbackClient(providerReg, cfg.Gateway.FallbackChain)
@@ -132,6 +141,15 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		logging.Infof("agentd: response cache enabled (ttl=%s, max_entries=%d)", cfg.Gateway.Cache.TTL, cfg.Gateway.Cache.MaxEntries)
 	}
 
+	// Build a dedicated Prometheus registry so agentd metrics are isolated from
+	// any global defaults that might bleed in from test harnesses or other packages.
+	promReg := prometheus.NewRegistry()
+	promReg.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+	metrics := NewMetrics(promReg, llmCache)
+
 	s := &Server{
 		cfg:              cfg,
 		llmClient:        llmClient,
@@ -146,6 +164,9 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		acpRuns:          make(map[string]*ACPRun),
 		httpClient:       &http.Client{Timeout: 5 * time.Minute},
 		stopCh:           make(chan struct{}),
+		metrics:          metrics,
+		promReg:          promReg,
+		metricsHandler:   promhttp.HandlerFor(promReg, promhttp.HandlerOpts{}),
 	}
 
 	// Background cleanup: remove completed/failed/cancelled runs older than 24h.
@@ -228,7 +249,7 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		logging.Infof("agentd: auth via authd at %s", authdURL)
 	}
 
-	// apikeyd — validates external ACP caller keys (llmp_ prefix).
+	// apikeyd — validates external ACP caller keys (stoa-infgw_ prefix).
 	if apikeydURL := envOr("AGENTD_APIKEYD_URL", cfg.Agentd.APIKeydURL); apikeydURL != "" {
 		s.apikeydClient = apikeydclient.New(apikeydURL)
 		logging.Infof("agentd: external ACP key validation via apikeyd at %s", apikeydURL)
@@ -349,11 +370,15 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/sessions/", s.handleSessionSubroute)
 	mux.HandleFunc("/tools", s.handleListTools)
 	mux.HandleFunc("/models", s.handleGetModels)
-	mux.HandleFunc("/metrics", s.handleMetrics)
+	mux.Handle("/metrics", s.metricsHandler)
 
 	// Agent registry CRUD.
 	mux.HandleFunc("/agents", s.handleAgents)
 	mux.HandleFunc("/agents/", s.handleAgentsByName)
+
+	// Project CRUD.
+	mux.HandleFunc("/projects", s.handleProjects)
+	mux.HandleFunc("/projects/", s.handleProjectsByID)
 
 	// ACP surface.
 	mux.HandleFunc("/acp/ping", s.handleACPPing)
@@ -399,6 +424,12 @@ func (s *Server) loadSessionsFromDB() {
 		sess.title = ds.Title
 		sess.tracer = app.SetupTracer(s.cfg, ds.ID)
 		sess.llmCtx = app.BuildLLMContext(s.cfg, s.skillRegistry, s.promptReg, s.personaReg, ds.Persona, nil, s.agentSkills...)
+		if len(ds.Overrides) > 0 && string(ds.Overrides) != "{}" {
+			var o llm.Overrides
+			if err := json.Unmarshal(ds.Overrides, &o); err == nil {
+				sess.overrides = &o
+			}
+		}
 
 		if sess.llmCtx.SystemPrompt != "" {
 			sess.messages = append(sess.messages, systemMessage(sess.llmCtx.SystemPrompt))
@@ -442,6 +473,12 @@ func (s *Server) loadSessionFromDB(ctx context.Context, sessionID string) (*Sess
 	sess.title = ds.Title
 	sess.tracer = app.SetupTracer(s.cfg, ds.ID)
 	sess.llmCtx = app.BuildLLMContext(s.cfg, s.skillRegistry, s.promptReg, s.personaReg, ds.Persona, nil, s.agentSkills...)
+	if len(ds.Overrides) > 0 && string(ds.Overrides) != "{}" {
+		var o llm.Overrides
+		if err := json.Unmarshal(ds.Overrides, &o); err == nil {
+			sess.overrides = &o
+		}
+	}
 
 	if sess.llmCtx.SystemPrompt != "" {
 		sess.messages = append(sess.messages, systemMessage(sess.llmCtx.SystemPrompt))
@@ -506,13 +543,16 @@ func (s *Server) handleSessionSubroute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// DELETE /sessions/:id (no trailing slash or suffix) — delete the session.
+	// DELETE or PATCH /sessions/:id (no trailing slash or suffix).
 	if slash < 0 {
-		if r.Method == http.MethodDelete {
+		switch r.Method {
+		case http.MethodDelete:
 			s.handleDeleteSession(w, r, rest)
-			return
+		case http.MethodPatch:
+			s.handlePatchSession(w, r, rest)
+		default:
+			http.NotFound(w, r)
 		}
-		http.NotFound(w, r)
 		return
 	}
 
@@ -549,6 +589,16 @@ func (s *Server) handleSessionSubroute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// /sessions/:id/subagents[/:agentID] — two-level path, handle before the switch.
+	if suffix == "subagents" || strings.HasPrefix(suffix, "subagents/") {
+		rest := ""
+		if len(suffix) > len("subagents/") {
+			rest = suffix[len("subagents/"):]
+		}
+		s.handleSubAgentsRoute(w, r, sess, rest)
+		return
+	}
+
 	switch suffix {
 	case "ws":
 		s.handleStream(w, r, sess)
@@ -556,6 +606,8 @@ func (s *Server) handleSessionSubroute(w http.ResponseWriter, r *http.Request) {
 		s.handleClearSession(w, r, sess)
 	case "compact":
 		s.handleCompactSession(w, r, sess)
+	case "branch":
+		s.handleBranchSession(w, r, sess)
 	case "tokens":
 		s.handleGetTokens(w, r, sess)
 	case "messages":

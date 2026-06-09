@@ -17,6 +17,7 @@ type SubAgentStatus string
 
 const (
 	SubAgentStatusRunning   SubAgentStatus = "running"
+	SubAgentStatusWaiting   SubAgentStatus = "waiting"
 	SubAgentStatusCompleted SubAgentStatus = "completed"
 	SubAgentStatusCancelled SubAgentStatus = "cancelled"
 	SubAgentStatusError     SubAgentStatus = "error"
@@ -55,7 +56,7 @@ type Session struct {
 	persona string
 	source  string // client that created the session ("web", "tui", "zulip", etc.)
 	userID  string // authd user UUID; empty for service/anonymous sessions
-	llmKey  string // per-user llmp_* key provisioned by authd at login; injected into LLM calls
+	llmKey  string // per-user stoa-infgw_* key provisioned by authd at login; injected into LLM calls
 	title   string // auto-generated conversation title; empty until first generation
 
 	// persistedMsgCount is the high-water mark for DB message writes.

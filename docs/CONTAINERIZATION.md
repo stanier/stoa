@@ -1,6 +1,8 @@
 # Containerization Guide for Stoa
 
-This guide covers running Stoa and its MCP servers in Docker containers for improved isolation, security, and deployment flexibility.
+> **Note:** This project uses **Podman** and `podman-compose` with `compose.yaml`. Use `podman-compose` and `make podman-build-all` / `make podman-push-all` for the primary toolchain. `make docker-build-all` / `docker-push-all` targets also exist for Docker-compatible environments.
+
+This guide covers running Stoa and its MCP servers in containers for improved isolation, security, and deployment flexibility.
 
 ## Table of Contents
 
@@ -23,14 +25,13 @@ This guide covers running Stoa and its MCP servers in Docker containers for impr
 **Benefits:**
 - **Isolation**: Each MCP server runs in its own container with resource limits
 - **Security**: Restricted Docker API access, no privileged containers, minimal attack surface
-- **Portability**: Same config works on dev, staging, and production
-- **Scalability**: Easy to deploy to Kubernetes for high availability
+- **Portability**: Same config works on dev and production
 - **Versioning**: Pin MCP server versions, rollback easily
 
 **Use Cases:**
 - **Local Development**: Test with containers before deploying
 - **CI/CD**: Run tests in isolated environments
-- **Production**: Deploy to Kubernetes with auto-scaling and health checks
+- **Production**: Single-host deployment with podman-compose
 
 ### Transport Types
 
@@ -92,18 +93,18 @@ Stoa supports three MCP transport modes:
 
 ## Quick Start
 
-### 1. Build Docker Images
+### 1. Build Images
 
 ```bash
-# Build all images
-make docker-build-all
+# Build all images (uses podman)
+make podman-build-all
 
-# Or build specific images
-make docker-build-mcp-filesystem
-make docker-build-mcp-memory
+# Or build specific MCP images
+make podman-build-mcp-filesystem
+make podman-build-mcp-memory
 ```
 
-**Result**: Images tagged as `stoa-mcp-<name>:latest`
+**Result**: Images tagged as `stoa-mcp-<name>:local`
 
 ### 2. Configure MCP Servers
 
@@ -127,17 +128,17 @@ mcp:
         - /mcp/root
 ```
 
-### 3. Run with Docker Compose
+### 3. Run with Podman Compose
 
 ```bash
 # Start services
-docker-compose up -d
+podman-compose up -d
 
 # Check logs
-docker-compose logs -f chat
+podman-compose logs -f chat
 
 # Stop services
-docker-compose down
+podman-compose down
 ```
 
 ---
@@ -265,18 +266,18 @@ mcp:
 
 ```bash
 # Development cycle
-make build-mcp               # Build binary
+make build-mcp-filesystem    # Build binary
 ./bin/debug/mcp-filesystem   # Test directly
 
 # Containerization test
-make docker-build-mcp-filesystem
+make podman-build-mcp-filesystem
 # Update config to use docker transport
 ./bin/debug/chat             # Test with container
 
 # Production
 export IMAGE_TAG=v1.2.3
-make docker-build-all
-make docker-push-all
+make podman-build-all
+make podman-push-all
 ```
 
 ---
@@ -288,46 +289,26 @@ make docker-push-all
 **Use Case**: Small deployments, personal projects
 
 ```bash
-# Set environment variables
-export LLM_PROVIDER=anthropic
+# Set environment variables (provider is selected in config.yaml, not via env)
 export ANTHROPIC_API_KEY=sk-ant-...
 export DOCKER_REGISTRY=ghcr.io/stanier
 
 # Build and push images
-make docker-build-all
-make docker-push-all
+make podman-build-all
+make podman-push-all
 
 # Start services
-docker-compose up -d
+podman-compose up -d
 
 # Check health
-docker-compose ps
-docker-compose logs -f server
+podman-compose ps
+podman-compose logs -f agentd
 ```
 
 **Persistent Data**:
 - Traces: `./data/traces`
 - Logs: `./data/logs`
 - MCP memory: Named volume `mcp-memory-data`
-
-### Kubernetes (Multi-Host, High Availability)
-
-**Use Case**: Production deployments, scaling, monitoring
-
-See [Kubernetes README](../deployments/kubernetes/README.md) for details.
-
-**Steps**:
-1. Update secrets in `deployments/kubernetes/secrets.yaml`
-2. Update image URLs in `deployments/kubernetes/configmap.yaml`
-3. Deploy: `kubectl apply -f deployments/kubernetes/`
-4. Monitor: `kubectl logs -n mcp-chat deployment/stoa-server -f`
-
-**Features**:
-- Auto-restart on failure
-- Persistent volumes for data
-- Resource limits and quotas
-- RBAC for security
-- Horizontal pod autoscaling (optional)
 
 ---
 
@@ -394,23 +375,11 @@ networks:
 
 ### Secrets Management
 
-**Development**:
+Pass secrets as environment variables:
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-docker-compose up
+podman-compose up -d
 ```
-
-**Production (Kubernetes)**:
-```bash
-kubectl create secret generic stoa-secrets \
-  --from-literal=anthropic-api-key=sk-ant-...
-```
-
-Or use external secrets:
-- AWS Secrets Manager
-- GCP Secret Manager
-- HashiCorp Vault
-- Sealed Secrets
 
 ---
 
@@ -442,7 +411,7 @@ docker logs stoa-docker-proxy
 
 **Check**: `docker-proxy` environment variables allow the operation
 
-**Fix**: Add to `docker-compose.yml`:
+**Fix**: Add to `compose.yaml`:
 ```yaml
 environment:
   CONTAINERS: 1  # Ensure this is set
@@ -558,7 +527,6 @@ Stoa fully supports **Podman** as a Docker alternative with minimal configuratio
 | Docker Transport (Go) | ✅ | ✅ | Works via `DOCKER_HOST` env var |
 | Image builds | ✅ | ✅ | Use `podman build` |
 | Compose files | ✅ | ✅ | Use `podman-compose` |
-| Kubernetes | ✅ | ✅ | Same manifests work |
 | Socket proxy | ✅ | ⚠️ | Not needed (rootless by default) |
 
 ### Quick Start with Podman
@@ -611,9 +579,9 @@ make docker-build-all
 **5. Run with Podman Compose**:
 ```bash
 # Use Podman-specific compose file
-podman-compose -f docker-compose.podman.yml up -d
+podman-compose -f compose.yaml up -d
 
-# Or use regular docker-compose.yml with manual socket mount
+# Or use regular compose.yaml with manual socket mount
 export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock
 podman-compose up -d
 ```
@@ -665,7 +633,7 @@ make build
 **Method 2: Podman Compose**:
 ```bash
 # Start all services
-podman-compose -f docker-compose.podman.yml up -d
+podman-compose -f compose.yaml up -d
 
 # View logs
 podman-compose logs -f chat
@@ -684,7 +652,7 @@ After=podman.socket
 [Service]
 Environment=DOCKER_HOST=unix://%t/podman/podman.sock
 Environment=ANTHROPIC_API_KEY=sk-ant-...
-ExecStart=/usr/local/bin/stoa-server --config /home/user/.config/stoa/config.yaml
+ExecStart=/usr/local/bin/agentd --port 7777
 Restart=on-failure
 
 [Install]
@@ -702,7 +670,7 @@ systemctl --user status stoa.service
 **1. SELinux Labels**:
 If you encounter permission issues on RHEL/Fedora/CentOS:
 ```yaml
-# Add to docker-compose.podman.yml
+# Add to compose.yaml
 security_opt:
   - label=disable  # Development only
   # Or for production:
@@ -740,21 +708,6 @@ podman images
 
 # Cleanup unused images
 podman image prune -a
-```
-
-### Kubernetes with Podman
-
-Podman can generate Kubernetes manifests from running containers:
-
-```bash
-# Run container with Podman
-podman run -d --name stoa-server ...
-
-# Generate Kubernetes YAML
-podman generate kube stoa-server > stoa-deployment.yaml
-
-# Deploy to Kubernetes
-kubectl apply -f stoa-deployment.yaml
 ```
 
 ### Troubleshooting Podman
@@ -839,49 +792,15 @@ docker stats $(docker ps --filter name=mcp- -q)
 docker events --filter type=container --filter event=start
 ```
 
-### CI/CD Integration
-
-```yaml
-# .github/workflows/build.yml
-- name: Build Docker images
-  run: make docker-build-all
-
-- name: Test containers
-  run: ./scripts/test-container-transport.sh
-
-- name: Push to registry
-  run: make docker-push-all
-  env:
-    DOCKER_REGISTRY: ghcr.io/${{ github.repository }}
-```
-
 ---
-
-## Migration Path
-
-### Phase 1: Parallel Mode (Current)
-- Support stdio, http, AND docker transports
-- Users choose per-server in config
-- Validate docker transport in staging
-
-### Phase 2: Docker Default (Future)
-- Recommend docker transport in docs
-- Keep stdio for local dev
-- Most production deployments use docker
-
-### Phase 3: Kubernetes Native (Long-term)
-- MCP servers as separate pods
-- Service mesh for communication
-- Full observability stack
 
 ---
 
 ## References
 
-- [Docker SDK for Go](https://pkg.go.dev/github.com/docker/docker/client)
+- [Docker SDK for Go](https://pkg.go.dev/github.com/moby/moby/client)
 - [Docker Socket Proxy](https://github.com/Tecnativa/docker-socket-proxy)
 - [MCP Specification](https://spec.modelcontextprotocol.io/)
-- [Kubernetes Best Practices](https://kubernetes.io/docs/concepts/configuration/overview/)
 
 ---
 
@@ -910,11 +829,10 @@ A: Yes, with proper security (socket proxy, resource limits, monitoring).
 A: ~10ms latency overhead, 1-2s container creation (one-time).
 
 **Q: Can I use Podman instead of Docker?**
-A: Yes! Fully supported. Set `DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock` and use `podman-compose -f docker-compose.podman.yml up`. See [Podman Support](#podman-support) section for details.
+A: Yes — Podman is the primary container runtime for this project. Set `DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock` and use `podman-compose up`. See [Podman Support](#podman-support) section for details.
 
 ---
 
 **Next Steps**:
 1. Run test suite: `./scripts/test-container-transport.sh`
-2. Try docker-compose: `docker-compose up -d`
-3. Deploy to K8s: See `deployments/kubernetes/README.md`
+2. Start services: `podman-compose up -d`

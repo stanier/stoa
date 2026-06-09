@@ -2,6 +2,7 @@ package agentdb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -16,10 +17,14 @@ type Session struct {
 	Persona           string
 	Source            string
 	Title             string
+	ProjectID         string          // empty when session is not assigned to a project
+	ParentSessionID   string          // empty for root sessions
+	BranchPoint       int             // seq index of last message copied; 0 for root sessions
 	CreatedAt         time.Time
 	LastActiveAt      time.Time
 	LastInputTokens   int
 	TotalOutputTokens int
+	Overrides         json.RawMessage // llm_overrides column; nil means no overrides
 }
 
 // CreateSession inserts a new session record.
@@ -41,12 +46,14 @@ func (d *DB) CreateSession(ctx context.Context, id, userID, persona, source stri
 // user are never returned. Pass userID="" to return all sessions (service accounts).
 func (d *DB) ListSessions(ctx context.Context, userID string) ([]Session, error) {
 	const qAll = `
-		SELECT id, COALESCE(user_id,''), persona, source, title, created_at, last_active_at,
-		       last_input_tokens, total_output_tokens
+		SELECT id, COALESCE(user_id,''), persona, source, title, COALESCE(project_id,''),
+		       COALESCE(parent_session_id,''), COALESCE(branch_point,0),
+		       created_at, last_active_at, last_input_tokens, total_output_tokens, llm_overrides
 		FROM agentd_sessions ORDER BY last_active_at DESC`
 	const qUser = `
-		SELECT id, COALESCE(user_id,''), persona, source, title, created_at, last_active_at,
-		       last_input_tokens, total_output_tokens
+		SELECT id, COALESCE(user_id,''), persona, source, title, COALESCE(project_id,''),
+		       COALESCE(parent_session_id,''), COALESCE(branch_point,0),
+		       created_at, last_active_at, last_input_tokens, total_output_tokens, llm_overrides
 		FROM agentd_sessions
 		WHERE user_id=$1 OR user_id IS NULL
 		ORDER BY last_active_at DESC`
@@ -88,13 +95,16 @@ func (d *DB) TouchLastActive(ctx context.Context, id string) error {
 // GetSession returns a single session by ID, or nil if not found.
 func (d *DB) GetSession(ctx context.Context, id string) (*Session, error) {
 	const q = `
-		SELECT id, COALESCE(user_id,''), persona, source, title, created_at, last_active_at,
-		       last_input_tokens, total_output_tokens
+		SELECT id, COALESCE(user_id,''), persona, source, title, COALESCE(project_id,''),
+		       COALESCE(parent_session_id,''), COALESCE(branch_point,0),
+		       created_at, last_active_at, last_input_tokens, total_output_tokens, llm_overrides
 		FROM agentd_sessions WHERE id=$1`
 	var s Session
 	err := d.pool.QueryRow(ctx, q, id).Scan(
-		&s.ID, &s.UserID, &s.Persona, &s.Source, &s.Title,
+		&s.ID, &s.UserID, &s.Persona, &s.Source, &s.Title, &s.ProjectID,
+		&s.ParentSessionID, &s.BranchPoint,
 		&s.CreatedAt, &s.LastActiveAt, &s.LastInputTokens, &s.TotalOutputTokens,
+		&s.Overrides,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -123,6 +133,14 @@ func (d *DB) UpdateTitle(ctx context.Context, id, title string) error {
 	return err
 }
 
+// UpdateOverrides persists per-session LLM overrides (provider/model/params) as JSONB.
+func (d *DB) UpdateOverrides(ctx context.Context, id string, overrides json.RawMessage) error {
+	_, err := d.pool.Exec(ctx,
+		`UPDATE agentd_sessions SET llm_overrides=$2 WHERE id=$1`,
+		id, overrides)
+	return err
+}
+
 // SearchSessions returns sessions whose title or message content matches the
 // full-text query q, ordered by relevance then recency.
 //
@@ -134,7 +152,9 @@ func (d *DB) SearchSessions(ctx context.Context, userID, q string) ([]Session, e
 	const qAll = `
 		SELECT DISTINCT ON (s.id)
 		       s.id, COALESCE(s.user_id,''), s.persona, s.source, s.title,
-		       s.created_at, s.last_active_at, s.last_input_tokens, s.total_output_tokens
+		       COALESCE(s.project_id,''), COALESCE(s.parent_session_id,''), COALESCE(s.branch_point,0),
+		       s.created_at, s.last_active_at, s.last_input_tokens, s.total_output_tokens,
+		       s.llm_overrides
 		FROM agentd_sessions s
 		LEFT JOIN agentd_messages m ON m.session_id = s.id
 		WHERE plainto_tsquery('english', $1) @@ to_tsvector('english', s.title)
@@ -143,7 +163,9 @@ func (d *DB) SearchSessions(ctx context.Context, userID, q string) ([]Session, e
 	const qUser = `
 		SELECT DISTINCT ON (s.id)
 		       s.id, COALESCE(s.user_id,''), s.persona, s.source, s.title,
-		       s.created_at, s.last_active_at, s.last_input_tokens, s.total_output_tokens
+		       COALESCE(s.project_id,''), COALESCE(s.parent_session_id,''), COALESCE(s.branch_point,0),
+		       s.created_at, s.last_active_at, s.last_input_tokens, s.total_output_tokens,
+		       s.llm_overrides
 		FROM agentd_sessions s
 		LEFT JOIN agentd_messages m ON m.session_id = s.id
 		WHERE (s.user_id = $2 OR s.user_id IS NULL)
@@ -188,10 +210,25 @@ func scanSessions(rows pgxRows) ([]Session, error) {
 	for rows.Next() {
 		var s Session
 		if err := rows.Scan(&s.ID, &s.UserID, &s.Persona, &s.Source, &s.Title,
-			&s.CreatedAt, &s.LastActiveAt, &s.LastInputTokens, &s.TotalOutputTokens); err != nil {
+			&s.ProjectID, &s.ParentSessionID, &s.BranchPoint,
+			&s.CreatedAt, &s.LastActiveAt, &s.LastInputTokens, &s.TotalOutputTokens,
+			&s.Overrides); err != nil {
 			return nil, fmt.Errorf("agentdb: scan session: %w", err)
 		}
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// BranchSession creates a new session that is a child of parentID, forked at
+// branchPoint (the seq index of the last message to carry forward).
+func (d *DB) BranchSession(ctx context.Context, newID, parentID, userID, persona, source string, branchPoint int) error {
+	const q = `
+		INSERT INTO agentd_sessions (id, user_id, persona, source, parent_session_id, branch_point)
+		VALUES ($1, NULLIF($2,''), $3, $4, $5, $6)
+		ON CONFLICT (id) DO NOTHING`
+	if _, err := d.pool.Exec(ctx, q, newID, userID, persona, source, parentID, branchPoint); err != nil {
+		return fmt.Errorf("agentdb: branch session: %w", err)
+	}
+	return nil
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"log"
 	"time"
@@ -16,17 +15,16 @@ const (
 )
 
 func main() {
-	baseURL       := flag.String("base-url", "", "Prometheus API base URL, e.g. http://prometheus:9090 (required)")
-	token         := flag.String("token", "", "Bearer token for authentication (optional)")
-	username      := flag.String("username", "", "Basic auth username (optional)")
-	password      := flag.String("password", "", "Basic auth password (optional)")
-	orgID         := flag.String("org-id", "", "X-Scope-OrgID header for Mimir/Cortex multi-tenancy (optional)")
-	timeoutSecs   := flag.Int("timeout", 30, "HTTP timeout in seconds")
-	logFile       := flag.String("log", "", "Log file path (default: stderr)")
-	pingTimeoutS  := flag.Int("ping-timeout", 0, "Ping watchdog timeout in seconds, 0=disabled")
+	f            := mcpserver.RegisterCommonFlags()
+	baseURL      := flag.String("base-url", "", "Prometheus API base URL, e.g. http://prometheus:9090 (required)")
+	token        := flag.String("token", "", "Bearer token for authentication (optional)")
+	username     := flag.String("username", "", "Basic auth username (optional)")
+	password     := flag.String("password", "", "Basic auth password (optional)")
+	orgID        := flag.String("org-id", "", "X-Scope-OrgID header for Mimir/Cortex multi-tenancy (optional)")
+	timeoutSecs  := flag.Int("timeout", 30, "HTTP timeout in seconds")
 	flag.Parse()
 
-	mcpserver.SetupLogging(*logFile)
+	mcpserver.SetupLogging(*f.LogFile)
 	if *baseURL == "" {
 		log.Fatal("-base-url is required (e.g. http://prometheus:9090)")
 	}
@@ -44,8 +42,5 @@ func main() {
 		OrgID:    *orgID,
 		Timeout:  time.Duration(*timeoutSecs) * time.Second,
 	}
-	srv := promql.NewServer(serverName, serverVersion, cfg)
-	if err := mcpserver.RunServer(context.Background(), srv, time.Duration(*pingTimeoutS)*time.Second); err != nil {
-		log.Fatalf("Server error: %v", err)
-	}
+	mcpserver.Serve(promql.NewServer(serverName, serverVersion, cfg), f)
 }

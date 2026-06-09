@@ -159,3 +159,5 @@ type agentDisconnectedMsg struct {
 
 // agentConnectingMsg is sent when the TUI starts connecting to agentd.
 type agentConnectingMsg struct{}
+
+type ctrlCResetMsg struct{}

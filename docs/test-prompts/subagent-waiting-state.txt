@@ -1,0 +1,25 @@
+This is a multi-turn test of the sub-agent tools. Send each numbered message as a separate turn
+and verify the result before proceeding to the next.
+
+--- TURN 1 ---
+Spawn a sub-agent whose entire task is: "Immediately call wait_for_message and wait. Do not do
+anything else until you receive a message." Save the returned agent_id. Then immediately call
+list_agents and report whether the agent's status is "waiting". Do not take any other action.
+
+--- TURN 2 ---
+Send the waiting agent (from turn 1) the message: "Your task is now complete. Please summarize
+what happened." Then call list_agents and report the agent's current status. Do not take any
+other action.
+
+--- TURN 3 ---
+Call list_agents and report the final status of the first agent (should be "completed"). Do not
+take any other action.
+
+--- TURN 4 ---
+Spawn a second sub-agent with the same task: "Immediately call wait_for_message and wait. Do not
+do anything else until you receive a message." Then call list_agents and confirm it shows
+"waiting". Do not take any other action.
+
+--- TURN 5 ---
+Cancel the second agent using cancel_agent. Then call list_agents and confirm it shows
+"cancelled". Do not take any other action.

@@ -1,5 +1,6 @@
 <script>
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
+  import { apiFetch } from './utils.js'
 
   let { sessionId } = $props()
 
@@ -10,9 +11,44 @@
   let dropdownEl    = $state(null)
   let searchEl      = $state(null)
 
+  let retryTimer = null
+  let bgPollTimer = null
+
   onMount(async () => {
     await Promise.all([loadModels(), loadConfig()])
+    scheduleRefresh()
   })
+
+  onDestroy(() => {
+    clearTimeout(retryTimer)
+    clearInterval(bgPollTimer)
+  })
+
+  function totalModelCount() {
+    return providers.reduce((n, p) => n + p.models.length, 0)
+  }
+
+  // After mount, if the model list looks like only a seed (≤1 model per provider),
+  // retry quickly until the backend's discovery goroutine has populated real results.
+  // Once we have a real list, switch to a low-frequency background poll for freshness.
+  let retryAttempt = 0
+  const MAX_RETRIES = 10
+  const RETRY_MS    = 3_000   // 3 s between startup retries
+  const BG_POLL_MS  = 300_000 // 5 min background poll
+
+  async function scheduleRefresh() {
+    if (retryAttempt < MAX_RETRIES && totalModelCount() <= providers.length) {
+      // Still looks like seed-only (one model per provider at most); retry.
+      retryAttempt++
+      retryTimer = setTimeout(async () => {
+        await loadModels()
+        scheduleRefresh()
+      }, RETRY_MS)
+    } else {
+      // Have real models — settle into a slow background poll for freshness.
+      bgPollTimer = setInterval(loadModels, BG_POLL_MS)
+    }
+  }
 
   async function loadModels() {
     try {
@@ -40,7 +76,7 @@
     isOpen = false
     query  = ''
     try {
-      await fetch(`/api/sessions/${sessionId}/config`, {
+      await apiFetch(`/api/sessions/${sessionId}/config`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider: providerName, model: modelName }),

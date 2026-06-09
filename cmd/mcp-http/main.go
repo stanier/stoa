@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"log"
 	"strings"
@@ -16,14 +15,13 @@ const (
 )
 
 func main() {
-	allowedDomains := flag.String("allow-domains", "", "Comma-separated list of allowed domains (empty = all allowed)")
-	maxBytes       := flag.Int64("max-bytes", 1*1024*1024, "Maximum response size in bytes")
-	timeoutSecs    := flag.Int("timeout", 30, "HTTP request timeout in seconds")
-	logFile        := flag.String("log", "", "Log file path (empty for stderr)")
-	pingTimeout    := flag.Duration("ping-timeout", 0, "Shut down if no ping received within this duration (0 = disabled)")
+	f               := mcpserver.RegisterCommonFlags()
+	allowedDomains  := flag.String("allow-domains", "", "Comma-separated list of allowed domains (empty = all allowed)")
+	maxBytes        := flag.Int64("max-bytes", 1*1024*1024, "Maximum response size in bytes")
+	timeoutSecs     := flag.Int("timeout", 30, "HTTP request timeout in seconds")
 	flag.Parse()
 
-	mcpserver.SetupLogging(*logFile)
+	mcpserver.SetupLogging(*f.LogFile)
 	log.Printf("Starting %s v%s", serverName, serverVersion)
 
 	var domains []string
@@ -44,8 +42,5 @@ func main() {
 		MaxBytes:       *maxBytes,
 		TimeoutSecs:    *timeoutSecs,
 	}
-	srv := httpserver.NewServer(serverName, serverVersion, cfg)
-	if err := mcpserver.RunServer(context.Background(), srv, *pingTimeout); err != nil {
-		log.Fatalf("Server error: %v", err)
-	}
+	mcpserver.Serve(httpserver.NewServer(serverName, serverVersion, cfg), f)
 }

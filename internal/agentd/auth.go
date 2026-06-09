@@ -3,6 +3,7 @@ package agentd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -38,11 +39,12 @@ func IsServiceFromContext(ctx context.Context) bool {
 // AuthMiddlewareWithAPIKeyd wraps the handler with authentication enforcement.
 //
 // When authdClient is non-nil (production), all requests are validated against
-// authd's /token/verify endpoint. Tokens with the "llmp_" prefix are additionally
+// authd's /token/verify endpoint. Tokens with the "stoa-infgw_" prefix are additionally
 // checked against apikeyd when an apikeydClient is provided.
 //
-// When authdClient is nil (local dev, no AGENTD_AUTHD_URL set), the handler is
-// served without authentication — a warning is logged at startup via WarnIfNoAuth.
+// When authdClient is nil the handler is served without authentication. This only
+// happens when the caller has already validated the config via CheckAuthConfig and
+// the operator explicitly set AGENTD_NO_AUTH=true.
 //
 // Auth endpoints (/auth/*) and /healthz bypass all checks so unauthenticated
 // clients can reach them.
@@ -50,11 +52,11 @@ func AuthMiddlewareWithAPIKeyd(ac *authdclient.Client, akc *apikeydclient.Client
 	if ac != nil {
 		return authdMiddlewareWithAPIKeyd(ac, akc, next)
 	}
-	return next // open access — startup warning already emitted by WarnIfNoAuth
+	return next // open access — CheckAuthConfig already enforced AGENTD_NO_AUTH=true at startup
 }
 
 // authdMiddlewareWithAPIKeyd validates Bearer tokens by calling authd's /token/verify.
-// When akc is non-nil, tokens with the "llmp_" prefix are also tried against apikeyd,
+// When akc is non-nil, tokens with the "stoa-infgw_" prefix are also tried against apikeyd,
 // allowing external ACP callers to authenticate with per-caller API keys.
 func authdMiddlewareWithAPIKeyd(ac *authdclient.Client, akc *apikeydclient.Client, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -69,8 +71,8 @@ func authdMiddlewareWithAPIKeyd(ac *authdclient.Client, akc *apikeydclient.Clien
 			return
 		}
 
-		// External ACP caller API keys (llmp_ prefix) are validated via apikeyd.
-		if akc != nil && strings.HasPrefix(raw, "llmp_") {
+		// External ACP caller API keys (stoa-infgw_ prefix) are validated via apikeyd.
+		if akc != nil && strings.HasPrefix(raw, "stoa-infgw_") {
 			keyInfo, err := akc.VerifyKey(r.Context(), raw)
 			if err == nil {
 				ctx := context.WithValue(r.Context(), ctxUserID, keyInfo.UserID)
@@ -78,7 +80,7 @@ func authdMiddlewareWithAPIKeyd(ac *authdclient.Client, akc *apikeydclient.Clien
 				return
 			}
 			// Fall through to authd — the token may have been issued by authd
-			// and happen to start with llmp_ (unlikely but handled gracefully).
+			// and happen to start with stoa-infgw_ (unlikely but handled gracefully).
 		}
 
 		info, err := ac.Verify(r.Context(), raw)
@@ -101,7 +103,7 @@ func authdMiddlewareWithAPIKeyd(ac *authdclient.Client, akc *apikeydclient.Clien
 // /auth/* endpoints are exempt so clients can initiate flows.
 // /healthz and /acp/ping are always open.
 func isExempt(path string) bool {
-	return strings.HasPrefix(path, "/auth/") || path == "/healthz" || path == "/acp/ping"
+	return strings.HasPrefix(path, "/auth/") || path == "/healthz" || path == "/acp/ping" || path == "/metrics"
 }
 
 // bearerToken extracts the token from "Authorization: Bearer <token>".
@@ -113,11 +115,21 @@ func bearerToken(r *http.Request) string {
 	return ""
 }
 
-// WarnIfNoAuth logs a startup warning when agentd is running without authentication.
-func WarnIfNoAuth(authdURL string) {
+// CheckAuthConfig validates the authentication configuration at startup.
+//
+// Returns nil when either:
+//   - authdURL is set (production auth via authd), or
+//   - noAuth is "true" (explicit opt-out for local dev — logs a prominent warning).
+//
+// Returns an error in all other cases so the caller can refuse to start rather than
+// silently serving all endpoints unauthenticated.
+func CheckAuthConfig(authdURL, noAuth string) error {
 	if authdURL != "" {
-		return
+		return nil
 	}
-	logging.Warnf("agentd: no authentication configured — all endpoints are publicly accessible. " +
-		"Set AGENTD_AUTHD_URL to enable authentication.")
+	if noAuth == "true" {
+		logging.Warnf("agentd: AGENTD_NO_AUTH=true — authentication is disabled, all endpoints are publicly accessible. Do not use in production.")
+		return nil
+	}
+	return fmt.Errorf("no authentication configured: set AGENTD_AUTHD_URL to enable auth, or set AGENTD_NO_AUTH=true to explicitly run without auth (local dev only)")
 }

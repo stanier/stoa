@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"log"
 	"os"
@@ -16,15 +15,14 @@ const (
 )
 
 func main() {
+	f           := mcpserver.RegisterCommonFlags()
 	apiKey      := flag.String("api-key", "", "Brave Search API key (or set BRAVE_API_KEY env var)")
 	maxResults  := flag.Int("max-results", 10, "Default number of results to return (1-20)")
 	safeSearch  := flag.String("safe-search", "moderate", "Default safe search level: off, moderate, strict")
 	timeoutSecs := flag.Int("timeout", 30, "HTTP request timeout in seconds")
-	logFile     := flag.String("log", "", "Log file path (empty for stderr)")
-	pingTimeout := flag.Duration("ping-timeout", 0, "Shut down if no ping received within this duration (0 = disabled)")
 	flag.Parse()
 
-	mcpserver.SetupLogging(*logFile)
+	mcpserver.SetupLogging(*f.LogFile)
 
 	key := *apiKey
 	if key == "" {
@@ -43,8 +41,5 @@ func main() {
 		SafeSearch:  *safeSearch,
 		TimeoutSecs: *timeoutSecs,
 	}
-	srv := websearch.NewServer(serverName, serverVersion, cfg)
-	if err := mcpserver.RunServer(context.Background(), srv, *pingTimeout); err != nil {
-		log.Fatalf("Server error: %v", err)
-	}
+	mcpserver.Serve(websearch.NewServer(serverName, serverVersion, cfg), f)
 }

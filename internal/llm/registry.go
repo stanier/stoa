@@ -10,8 +10,8 @@ import (
 	"github.com/stanier/stoa/internal/logging"
 )
 
-// ModelInfo describes a model available from a provider.
-type ModelInfo struct {
+// RegistryModel describes a model available from a provider in the registry.
+type RegistryModel struct {
 	Provider string `json:"provider"`
 	ID       string `json:"id"`
 }
@@ -118,14 +118,14 @@ func (r *ProviderRegistry) GetClient(name string) (Client, bool) {
 }
 
 // ListAllModels returns all known models across all providers.
-func (r *ProviderRegistry) ListAllModels() []ModelInfo {
+func (r *ProviderRegistry) ListAllModels() []RegistryModel {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var result []ModelInfo
+	var result []RegistryModel
 	for _, name := range r.order {
 		for _, id := range r.models[name] {
-			result = append(result, ModelInfo{Provider: name, ID: id})
+			result = append(result, RegistryModel{Provider: name, ID: id})
 		}
 	}
 	return result
@@ -139,8 +139,9 @@ func (r *ProviderRegistry) ProviderNames() []string {
 }
 
 // RefreshModels queries each provider for its current model list and updates the cache.
-// Providers with a static model list (from config) are not refreshed unless forceAll is true.
-func (r *ProviderRegistry) RefreshModels(ctx context.Context, names []string) {
+// Returns true if every provider was refreshed without error.
+func (r *ProviderRegistry) RefreshModels(ctx context.Context, names []string) bool {
+	allOK := true
 	for _, name := range names {
 		r.mu.RLock()
 		client, ok := r.clients[name]
@@ -152,6 +153,7 @@ func (r *ProviderRegistry) RefreshModels(ctx context.Context, names []string) {
 		models, err := client.ListModels(ctx)
 		if err != nil {
 			logging.Warnf("llm: registry: list models for %q: %v", name, err)
+			allOK = false
 			continue
 		}
 		sort.Strings(models)
@@ -161,14 +163,33 @@ func (r *ProviderRegistry) RefreshModels(ctx context.Context, names []string) {
 		r.mu.Unlock()
 		logging.Infof("llm: registry: discovered %d models for provider %q", len(models), name)
 	}
+	return allOK
 }
 
 // StartPeriodicRefresh discovers models on startup, then repeats at interval.
-// Pass an empty or nil providerNames to refresh all. Pass zero interval to only refresh once.
+// If the initial refresh fails for any provider (e.g. because the upstream isn't
+// ready yet), it retries with short delays before settling into the long interval.
+// Pass zero interval to only refresh once (with startup retries).
 func (r *ProviderRegistry) StartPeriodicRefresh(ctx context.Context, interval time.Duration) {
 	names := r.ProviderNames()
 	go func() {
-		r.RefreshModels(ctx, names)
+		// Startup retries: try immediately, then back off if any provider failed.
+		// This recovers quickly when the inference-gateway or an upstream starts
+		// after agentd (common in compose setups).
+		startupRetries := []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second, time.Minute}
+		if ok := r.RefreshModels(ctx, names); !ok {
+			for _, wait := range startupRetries {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(wait):
+				}
+				if r.RefreshModels(ctx, names) {
+					break
+				}
+			}
+		}
+
 		if interval <= 0 {
 			return
 		}

@@ -16,6 +16,7 @@ func handleAgentConnectedMsg(m Model, msg agentConnectedMsg) (Model, tea.Cmd) {
 	m.conn = msg.conn
 	m.agentClient = msg.client
 	m.sessionID = msg.sessionID
+	m.agentController = agentproto.NewClientAgentController(msg.client, msg.sessionID)
 
 	// Replace the "Connecting..." welcome note with a connected notice.
 	for i, chatMsg := range m.messages {

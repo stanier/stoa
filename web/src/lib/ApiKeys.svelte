@@ -1,5 +1,8 @@
 <script>
   import { onMount } from 'svelte'
+  import Modal from './Modal.svelte'
+  import PageLayout from './PageLayout.svelte'
+  import { formatDate, apiFetch } from './utils.js'
 
   let { onBack } = $props()
 
@@ -45,7 +48,7 @@
     try {
       const body = { name: newName.trim() }
       if (newExpiry) body.expires_in_days = parseInt(newExpiry, 10)
-      const res = await fetch('/api/apikeys', {
+      const res = await apiFetch('/api/apikeys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -71,7 +74,7 @@
   async function revokeKey(id) {
     revoking = true
     try {
-      const res = await fetch(`/api/apikeys/${id}`, { method: 'DELETE' })
+      const res = await apiFetch(`/api/apikeys/${id}`, { method: 'DELETE' })
       if (res.ok || res.status === 204) {
         revokeId = null
         await loadKeys()
@@ -87,33 +90,19 @@
     }
   }
 
-  function formatDate(iso) {
-    if (!iso) return '—'
-    return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
-  }
-
   function copyKey() {
     navigator.clipboard.writeText(newKey)
   }
 </script>
 
-<div class="page">
-  <div class="header">
-    <button class="back-btn" onclick={onBack}>← Back</button>
-    <h2>API Keys</h2>
-    <button class="create-btn" onclick={() => { showCreate = true; newKey = null }}>+ New key</button>
-  </div>
-
-  <p class="hint">
-    API keys let applications call the LLM proxy on your behalf.
-    Each key is shown only once — store it somewhere safe.
-  </p>
-
-  {#if error}
-    <div class="error-bar">{error}</div>
-  {/if}
-
-  <!-- New key revealed after creation -->
+<PageLayout
+  title="API Keys"
+  hint="API keys let applications call the LLM proxy on your behalf. Each key is shown only once — store it somewhere safe."
+  {error}
+  {onBack}
+  actionLabel="+ New key"
+  onAction={() => { showCreate = true; newKey = null }}
+>
   {#if newKey}
     <div class="reveal-box">
       <div class="reveal-label">Your new API key — copy it now, it won't be shown again.</div>
@@ -125,7 +114,6 @@
     </div>
   {/if}
 
-  <!-- Key table -->
   {#if loading}
     <div class="loading">Loading…</div>
   {:else if keys.length === 0}
@@ -162,114 +150,67 @@
       </tbody>
     </table>
   {/if}
-</div>
+</PageLayout>
 
 <!-- Create key modal -->
 {#if showCreate}
-  <div class="modal-backdrop" onclick={() => showCreate = false}>
-    <div class="modal" onclick={e => e.stopPropagation()}>
-      <h3>New API key</h3>
-      {#if createError}
-        <div class="error-bar">{createError}</div>
-      {/if}
-      <label>
-        Name <span class="required">*</span>
-        <input bind:value={newName} placeholder="e.g. prod-app, dev-laptop" disabled={creating} />
-      </label>
-      <label>
-        Expires in (days) <span class="optional">optional</span>
-        <input type="number" bind:value={newExpiry} placeholder="leave blank for no expiry" min="1" disabled={creating} />
-      </label>
-      <div class="modal-btns">
-        <button class="cancel-btn" onclick={() => showCreate = false} disabled={creating}>Cancel</button>
-        <button class="confirm-btn" onclick={createKey} disabled={creating || !newName.trim()}>
-          {creating ? 'Creating…' : 'Create'}
-        </button>
-      </div>
+  <Modal title="New API key" onclose={() => showCreate = false} width="380px">
+    {#if createError}
+      <div class="error-bar">{createError}</div>
+    {/if}
+    <label>
+      Name <span class="required">*</span>
+      <input bind:value={newName} placeholder="e.g. prod-app, dev-laptop" disabled={creating} />
+    </label>
+    <label>
+      Expires in (days) <span class="optional">optional</span>
+      <input type="number" bind:value={newExpiry} placeholder="leave blank for no expiry" min="1" disabled={creating} />
+    </label>
+    <div class="modal-btns">
+      <button class="cancel-btn" onclick={() => showCreate = false} disabled={creating}>Cancel</button>
+      <button class="confirm-btn" onclick={createKey} disabled={creating || !newName.trim()}>
+        {creating ? 'Creating…' : 'Create'}
+      </button>
     </div>
-  </div>
+  </Modal>
 {/if}
 
 <!-- Revoke confirmation modal -->
 {#if revokeId}
-  <div class="modal-backdrop" onclick={() => revokeId = null}>
-    <div class="modal" onclick={e => e.stopPropagation()}>
-      <h3>Revoke key?</h3>
-      <p>This cannot be undone. Any application using this key will stop working immediately.</p>
-      <div class="modal-btns">
-        <button class="cancel-btn" onclick={() => revokeId = null} disabled={revoking}>Cancel</button>
-        <button class="danger-btn" onclick={() => revokeKey(revokeId)} disabled={revoking}>
-          {revoking ? 'Revoking…' : 'Revoke'}
-        </button>
-      </div>
+  <Modal title="Revoke key?" onclose={() => revokeId = null} width="380px">
+    <p>This cannot be undone. Any application using this key will stop working immediately.</p>
+    <div class="modal-btns">
+      <button class="cancel-btn" onclick={() => revokeId = null} disabled={revoking}>Cancel</button>
+      <button class="danger-btn" onclick={() => revokeKey(revokeId)} disabled={revoking}>
+        {revoking ? 'Revoking…' : 'Revoke'}
+      </button>
     </div>
-  </div>
+  </Modal>
 {/if}
 
 <style>
-  .page {
-    flex: 1;
-    padding: 2rem;
-    overflow-y: auto;
-    background: var(--bg);
-    color: var(--text);
-  }
-
-  .header {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    margin-bottom: 0.5rem;
-  }
-
-  h2 { margin: 0; font-size: 1.25rem; flex: 1; color: var(--text); }
-
-  .back-btn {
-    background: none; border: none; color: var(--text3);
-    cursor: pointer; font-size: 0.9rem; padding: 0.25rem 0.5rem;
-    transition: color 0.15s;
-  }
-  .back-btn:hover { color: var(--text); }
-
-  .create-btn {
-    background: var(--accent); color: var(--bg); border: none;
-    border-radius: 6px; padding: 0.4rem 0.9rem;
-    cursor: pointer; font-size: 0.85rem; transition: background 0.15s;
-  }
-  .create-btn:hover { background: var(--accent-light); }
-
-  .hint { color: var(--text3); font-size: 0.85rem; margin: 0 0 1.5rem; }
-
-  .error-bar {
-    background: #3b0a0a; color: #f87171;
-    padding: 0.6rem 1rem; border-radius: 6px;
-    margin-bottom: 1rem; font-size: 0.85rem;
-  }
-
   .reveal-box {
-    background: var(--depth); border: 1px solid #166534;
+    background: var(--depth); border: 1px solid var(--success-bg);
     border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.5rem;
   }
-  .reveal-label { font-size: 0.85rem; color: #86efac; margin-bottom: 0.5rem; }
+  .reveal-label { font-size: 0.85rem; color: var(--success); margin-bottom: 0.5rem; }
   .reveal-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
   .reveal-key {
     flex: 1; font-family: monospace; font-size: 0.85rem;
-    background: var(--depth); color: #86efac;
+    background: var(--depth); color: var(--success);
     padding: 0.4rem 0.75rem; border-radius: 4px; word-break: break-all;
   }
   .copy-btn {
-    background: #166534; color: #86efac; border: none;
+    background: var(--success-bg); color: var(--success); border: none;
     border-radius: 4px; padding: 0.35rem 0.75rem;
     cursor: pointer; font-size: 0.8rem; white-space: nowrap;
   }
-  .copy-btn:hover { background: #15803d; }
+  .copy-btn:hover { background: var(--success-bg-hover); }
   .dismiss-btn {
     background: none; border: none; color: var(--text3);
     cursor: pointer; font-size: 0.8rem; padding: 0; transition: color 0.15s;
   }
   .dismiss-btn:hover { color: var(--text2); }
-
-  .loading, .empty { color: var(--text3); padding: 2rem 0; text-align: center; }
 
   .keys-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
   .keys-table th {
@@ -289,63 +230,12 @@
   }
 
   .revoke-btn {
-    background: none; border: 1px solid #4b1c1c;
-    color: #f87171; border-radius: 4px;
+    background: none; border: 1px solid var(--danger-border);
+    color: var(--danger); border-radius: 4px;
     padding: 0.2rem 0.6rem; cursor: pointer; font-size: 0.8rem;
   }
-  .revoke-btn:hover { background: #3b0a0a; }
+  .revoke-btn:hover { background: var(--danger-bg); }
 
   .revoked-label { color: var(--text4); font-size: 0.8rem; }
 
-  .modal-backdrop {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
-    display: flex; align-items: center; justify-content: center; z-index: 100;
-  }
-  .modal {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 10px; padding: 1.5rem; width: 380px; max-width: 90vw;
-  }
-  .modal h3 { margin: 0 0 1rem; font-size: 1rem; color: var(--text); }
-  .modal p  { font-size: 0.875rem; color: var(--text2); margin: 0 0 1.25rem; }
-
-  label {
-    display: flex; flex-direction: column; gap: 0.35rem;
-    font-size: 0.85rem; color: var(--text2); margin-bottom: 1rem;
-  }
-  label input {
-    background: var(--depth); border: 1px solid var(--border);
-    border-radius: 6px; color: var(--text);
-    padding: 0.5rem 0.75rem; font-size: 0.875rem; outline: none;
-    transition: border-color 0.15s;
-  }
-  label input:focus { border-color: var(--accent); }
-
-  .required { color: #f87171; }
-  .optional { color: var(--text4); font-size: 0.75rem; }
-
-  .modal-btns { display: flex; gap: 0.75rem; justify-content: flex-end; }
-
-  .cancel-btn {
-    background: var(--surface-hi); border: 1px solid var(--border);
-    color: var(--text2); border-radius: 6px;
-    padding: 0.4rem 1rem; cursor: pointer; font-size: 0.875rem;
-    transition: background 0.15s;
-  }
-  .cancel-btn:hover { background: var(--hover); }
-
-  .confirm-btn {
-    background: var(--accent); border: none; color: var(--bg);
-    border-radius: 6px; padding: 0.4rem 1rem;
-    cursor: pointer; font-size: 0.875rem; transition: background 0.15s;
-  }
-  .confirm-btn:hover:not(:disabled) { background: var(--accent-light); }
-  .confirm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  .danger-btn {
-    background: #991b1b; border: none; color: #fff;
-    border-radius: 6px; padding: 0.4rem 1rem;
-    cursor: pointer; font-size: 0.875rem;
-  }
-  .danger-btn:hover:not(:disabled) { background: #7f1d1d; }
-  .danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

@@ -2,7 +2,7 @@
 //
 // Users authenticate via the standard OIDC flow (authd + local-idp) to reach
 // the web UI, where they can create, label, and revoke API keys.  The keys
-// themselves are validated by llm-proxy via the /keys/verify endpoint.
+// themselves are validated by inference-gateway via the /keys/verify endpoint.
 //
 // Flags:
 //
@@ -25,7 +25,7 @@ import (
 )
 
 func main() {
-	configFile  := flag.String("config", "", "path to apikeyd.yaml")
+	configFile := flag.String("config", "", "path to apikeyd.yaml")
 	migrateOnly := flag.Bool("migrate-only", false, "run database migrations and exit")
 	flag.Parse()
 

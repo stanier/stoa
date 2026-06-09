@@ -186,7 +186,9 @@ func (m *Model) renderSingleMessage(idx int) string {
 func (m Model) renderStatusLine() string {
 	var status string
 
-	if m.err != nil {
+	if m.ctrlCPending {
+		status = errorStyle.Render("Press Ctrl+C again to quit")
+	} else if m.err != nil {
 		status = errorStyle.Render(fmt.Sprintf("Error: %v", m.err))
 	} else if m.isStreaming {
 		status = helpStyle.Render("Streaming response...")

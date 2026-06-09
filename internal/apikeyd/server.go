@@ -3,14 +3,21 @@ package apikeyd
 import (
 	"fmt"
 	"net/http"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Server is the apikeyd HTTP server.
 type Server struct {
-	cfg        *Config
-	db         *DB
-	mux        *http.ServeMux
-	httpClient *http.Client
+	cfg            *Config
+	db             *DB
+	mux            *http.ServeMux
+	httpClient     *http.Client
+	promReg        *prometheus.Registry
+	metrics        *apikeydMetrics
+	metricsHandler http.Handler
 }
 
 // NewServer constructs a fully-wired Server.
@@ -21,6 +28,16 @@ func NewServer(cfg *Config, db *DB) *Server {
 		mux:        http.NewServeMux(),
 		httpClient: &http.Client{},
 	}
+
+	promReg := prometheus.NewRegistry()
+	promReg.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+	s.metrics = newAPIKeydMetrics(promReg)
+	s.promReg = promReg
+	s.metricsHandler = promhttp.HandlerFor(promReg, promhttp.HandlerOpts{})
+
 	s.registerRoutes()
 	return s
 }
@@ -28,16 +45,17 @@ func NewServer(cfg *Config, db *DB) *Server {
 // ListenAndServe starts the HTTP server on the configured port.
 func (s *Server) ListenAndServe() error {
 	addr := fmt.Sprintf(":%d", s.cfg.Port)
-	return http.ListenAndServe(addr, s.mux)
+	return http.ListenAndServe(addr, s.metrics.middleware(s.mux))
 }
 
 func (s *Server) registerRoutes() {
+	s.mux.Handle("/metrics", s.metricsHandler)
 	// ── Auth flow (no session required) ──────────────────────────────────
 	s.mux.HandleFunc("/auth/login", s.handleLogin)
 	s.mux.HandleFunc("/auth/callback", s.handleCallback)
 	s.mux.HandleFunc("/auth/logout", s.handleLogout)
 
-	// ── Key verification (called by llm-proxy, no session cookie) ────────
+	// ── Key verification (called by inference-gateway, no session cookie) ────────
 	s.mux.HandleFunc("/keys/verify", s.handleVerifyKey)
 
 	// ── Admin endpoints (APIKEYD_ADMIN_TOKEN required) ────────────────────
