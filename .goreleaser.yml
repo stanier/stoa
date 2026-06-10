@@ -1,0 +1,266 @@
+version: 2
+
+project_name: stoa
+
+builds:
+  # Core tools
+  - id: chat
+    binary: chat
+    main: ./cmd/chat
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  - id: stoa
+    binary: stoa
+    main: ./cmd/stoa
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  - id: auth-admin
+    binary: auth-admin
+    main: ./cmd/auth-admin
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  # MCP servers
+  - id: mcp-acp
+    binary: mcp-acp
+    main: ./cmd/mcp-acp
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  - id: mcp-attachments
+    binary: mcp-attachments
+    main: ./cmd/mcp-attachments
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  - id: mcp-diff
+    binary: mcp-diff
+    main: ./cmd/mcp-diff
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  - id: mcp-fetch
+    binary: mcp-fetch
+    main: ./cmd/mcp-fetch
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  - id: mcp-filesystem
+    binary: mcp-filesystem
+    main: ./cmd/mcp-filesystem
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  - id: mcp-graphql
+    binary: mcp-graphql
+    main: ./cmd/mcp-graphql
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  - id: mcp-http
+    binary: mcp-http
+    main: ./cmd/mcp-http
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  - id: mcp-knowledgebase
+    binary: mcp-knowledgebase
+    main: ./cmd/mcp-knowledgebase
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  - id: mcp-memory
+    binary: mcp-memory
+    main: ./cmd/mcp-memory
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  - id: mcp-netbox
+    binary: mcp-netbox
+    main: ./cmd/mcp-netbox
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  - id: mcp-promql
+    binary: mcp-promql
+    main: ./cmd/mcp-promql
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  - id: mcp-shell
+    binary: mcp-shell
+    main: ./cmd/mcp-shell
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  - id: mcp-time
+    binary: mcp-time
+    main: ./cmd/mcp-time
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  - id: mcp-trello
+    binary: mcp-trello
+    main: ./cmd/mcp-trello
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  - id: mcp-web-search
+    binary: mcp-web-search
+    main: ./cmd/mcp-web-search
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+  - id: mcp-zulip
+    binary: mcp-zulip
+    main: ./cmd/mcp-zulip
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - {goos: windows, goarch: arm64}
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/stanier/stoa/internal/version.Version={{.Version}}
+
+archives:
+  - id: default
+    name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: Features
+      regexp: '^feat'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^fix'
+      order: 1
+    - title: Other Changes
+      order: 999
