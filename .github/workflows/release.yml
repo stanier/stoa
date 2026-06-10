@@ -6,8 +6,24 @@ on:
       - 'v*.*.*'
 
 jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        run: make test
+
   release:
     name: Release
+    needs: [test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -22,31 +38,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-
-      - name: Install frontend dependencies
-        run: npm ci
-        working-directory: web
-
-      - name: Build distribution binaries
-        run: make dist
-
-      - name: Package binaries
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
         env:
-          VERSION: ${{ github.ref_name }}
-        run: tar -czf "stoa-${VERSION}-linux-amd64.tar.gz" -C bin/dist .
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ github.ref_name }}
-        run: |
-          gh release create "${VERSION}" \
-            --title "Release ${VERSION}" \
-            --generate-notes \
-            "stoa-${VERSION}-linux-amd64.tar.gz"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
