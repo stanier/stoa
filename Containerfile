@@ -147,7 +147,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 FROM builder AS build-webd
 COPY --from=web-builder /dist ./internal/webd/dist
 RUN --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/webd ./cmd/webd
+    CGO_ENABLED=0 GOOS=linux go build -tags dist -trimpath -ldflags="-s -w" -o /app/webd ./cmd/webd
 
 FROM builder AS build-zulip-bridge
 RUN --mount=type=cache,target=/root/.cache/go-build \
