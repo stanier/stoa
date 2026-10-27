@@ -150,6 +150,7 @@ MCP tools are registered as adapters (`internal/mcp/adapter.go`) that call `clie
 1. Browser: GET /auth/login
    webd calls authd POST /oauth/login
    authd returns { login_id, url }
+   webd sets a __login_id cookie on this browser (HttpOnly, SameSite=Lax)
 
 2. authd redirects browser to local-idp:
    GET local-idp:9999/authorize?client_id=...&redirect_uri=http://authd:8888/oauth/callback&state=...
@@ -161,9 +162,12 @@ MCP tools are registered as adapters (`internal/mcp/adapter.go`) that call `clie
 4. authd exchanges code for ID token (calls local-idp /token)
    authd verifies ID token signature (JWK from local-idp /.well-known/jwks.json)
    authd issues HMAC-signed session token; stores in Postgres (authdb)
-   authd redirects: GET webd:3000/?token=<session-token>
+   authd redirects: GET webd:3000/auth/callback?login_id=...&code=<one-time code>
+   (the token itself never appears in a URL)
 
-5. webd calls authd POST /token/verify to validate
+5. webd checks login_id against the __login_id cookie (a login someone else
+   started fails here), then swaps the code: authd POST /oauth/login/exchange
+   webd calls authd POST /token/verify to validate
    webd sets HttpOnly SameSite cookie containing session-token
    webd redirects browser to /
 ```

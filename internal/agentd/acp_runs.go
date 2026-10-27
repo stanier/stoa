@@ -25,7 +25,10 @@ type ACPRun struct {
 	ID        string
 	SessionID string
 	AgentName string
-	Status    ACPRunStatus
+	// ownerUserID is the authenticated caller that created the run; only they
+	// (or a service account) may read, resume or cancel it.
+	ownerUserID string
+	Status      ACPRunStatus
 	Output    []acpMessage
 	Error     string
 

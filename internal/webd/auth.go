@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/stanier/stoa/internal/authdclient"
 )
 
 // UserIDFromContext returns the authenticated user ID from the request context.
@@ -55,22 +57,35 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var loginResp struct {
-		URL string `json:"url"`
+		LoginID string `json:"login_id"`
+		URL     string `json:"url"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&loginResp); err != nil || loginResp.URL == "" {
+	if err := json.NewDecoder(resp.Body).Decode(&loginResp); err != nil || loginResp.URL == "" || loginResp.LoginID == "" {
 		http.Error(w, "invalid auth response", http.StatusBadGateway)
 		return
 	}
 
+	// Tie the login to this browser; the callback must come back to it.
+	authdclient.SetLoginCookie(w, loginResp.LoginID, strings.HasPrefix(s.cfg.ExternalURL, "https"))
 	http.Redirect(w, r, loginResp.URL, http.StatusFound)
 }
 
 // handleCallback receives the browser redirect from authd after a successful
-// login. authd appends ?token=<session_token> to the post_login_redirect URL.
+// login. authd appends ?login_id=...&code=<one-time code> to the
+// post_login_redirect URL; webd checks the login_id against the cookie set by
+// handleLogin and exchanges the code for the session token.
 func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		http.Error(w, "missing token", http.StatusBadRequest)
+	loginID, code, err := authdclient.CheckLoginCallback(r)
+	if err != nil {
+		http.Error(w, "this login was not started in this browser; please sign in again", http.StatusBadRequest)
+		return
+	}
+	authdclient.ClearLoginCookie(w)
+
+	token, llmKey, err := authdclient.ExchangeLoginCode(r.Context(), s.httpClient, s.cfg.AuthdURL, loginID, code)
+	if err != nil {
+		log.Printf("webd: login exchange: %v", err)
+		http.Error(w, "login failed; please sign in again", http.StatusBadRequest)
 		return
 	}
 
@@ -96,7 +111,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Store the per-user LLM key (provisioned by authd at login) in its own
 	// HttpOnly cookie. Injected into agentd SessionConfig at session creation.
-	if llmKey := r.URL.Query().Get("llm_key"); llmKey != "" {
+	if llmKey != "" {
 		http.SetCookie(w, &http.Cookie{
 			Name:     llmKeyCookie,
 			Value:    llmKey,

@@ -40,6 +40,7 @@ type Server struct {
 	promptReg     *prompts.Registry
 	personaReg    *personas.Registry
 	permsSetup    *app.PermissionsSetup // may be nil when permissions disabled
+	permRouter    *permRouter           // routes permsSetup's events per session; nil when permissions disabled
 	mcpManager    *mcp.ServerManager   // may be nil if no MCP configured
 	agentSkills   []*agentskills.SkillMetadata
 
@@ -74,8 +75,11 @@ type Server struct {
 	acpRuns   map[string]*ACPRun
 	acpRunsMu sync.RWMutex
 
-	// httpClient is used for proxying ACP runs to external agents.
+	// httpClient is used for proxying ACP runs to operator-provisioned external agents.
 	httpClient *http.Client
+	// publicHTTPClient is used for user-registered external agents; it can only
+	// reach public addresses (see newPublicOnlyHTTPClient).
+	publicHTTPClient *http.Client
 
 	// stopCh is closed when the server is stopping; signals background goroutines.
 	stopCh chan struct{}
@@ -163,10 +167,16 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		sessions:         make(map[string]*Session),
 		acpRuns:          make(map[string]*ACPRun),
 		httpClient:       &http.Client{Timeout: 5 * time.Minute},
+		publicHTTPClient: newPublicOnlyHTTPClient(5 * time.Minute),
 		stopCh:           make(chan struct{}),
 		metrics:          metrics,
 		promReg:          promReg,
 		metricsHandler:   promhttp.HandlerFor(promReg, promhttp.HandlerOpts{}),
+	}
+
+	if permsSetup != nil {
+		s.permRouter = newPermRouter()
+		go s.permRouter.run(permsSetup.RequestChan, permsSetup.MentionChan, s.stopCh)
 	}
 
 	// Background cleanup: remove completed/failed/cancelled runs older than 24h.
@@ -284,13 +294,10 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		if permsSetup != nil {
 			mcpOpts.PermChecker = permsSetup.Checker
 			mcpOpts.AuditLogger = permsSetup.AuditLogger
-			// Note: we do NOT use the global permsSetup channels here.
-			// Per-session channels are wired at session creation time via
-			// each session's permRequestChan / permMentionChan. The MCP tools
-			// are wrapped per-session in buildSessionLLMContext when needed.
-			// For simplicity, the global channels are used here as the initial
-			// registration channels; session-specific routing is handled by the
-			// WebSocket handlers that drain the per-session channels.
+			// MCP tools are registered once, globally, so they all send to the
+			// global channels. Each event carries the session ID from the tool
+			// call's context, and s.permRouter delivers it to that session's
+			// connection only.
 			mcpOpts.PermReqChan = permsSetup.RequestChan
 			mcpOpts.PermMentionChan = permsSetup.MentionChan
 		}
@@ -579,14 +586,14 @@ func (s *Server) handleSessionSubroute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Ownership check: non-service users may not access sessions owned by someone else.
-	// Sessions with no userID (unowned/legacy) are accessible to any authenticated user.
-	if !IsServiceFromContext(r.Context()) {
-		requesterID, _ := UserIDFromContext(r.Context())
-		if sess.userID != "" && requesterID != "" && sess.userID != requesterID {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
+	// Ownership check: non-service users may only access their own sessions.
+	// Unowned (legacy) sessions are service-only.
+	sess.mu.Lock()
+	owner := sess.userID
+	sess.mu.Unlock()
+	if !callerMayAccess(r.Context(), owner) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
 	}
 
 	// /sessions/:id/subagents[/:agentID] — two-level path, handle before the switch.

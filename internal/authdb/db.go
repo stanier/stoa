@@ -17,7 +17,7 @@ var migrationsFS embed.FS
 
 // RequiredSchemaVersion is the goose migration version this binary expects.
 // Bump this constant each time a new migration file is added.
-const RequiredSchemaVersion = 5
+const RequiredSchemaVersion = 7
 
 // DB wraps a pgxpool.Pool and provides typed methods for the auth schema.
 type DB struct {

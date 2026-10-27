@@ -82,6 +82,7 @@ func (t *PermissionAwareMCPTool) Execute(ctx context.Context, params json.RawMes
 				ServerName: t.serverName,
 				Message:    decision.MentionText,
 				Timestamp:  time.Now(),
+				SessionID:  permissions.SessionIDFromContext(ctx),
 			}:
 			default:
 				// Channel full, skip notification
@@ -138,6 +139,7 @@ func (t *PermissionAwareMCPTool) requestPermission(
 		Rank:         decision.Rank,
 		RequestedAt:  time.Now(),
 		ResponseChan: make(chan permissions.PermissionResponse, 1),
+		SessionID:    permissions.SessionIDFromContext(ctx),
 	}
 
 	// Send to UI via channel
@@ -157,6 +159,7 @@ func (t *PermissionAwareMCPTool) requestPermission(
 				ServerName:  t.serverName,
 				Scope:       resp.Scope,
 				GrantedAt:   time.Now(),
+				SessionID:   req.SessionID,
 			}
 			t.checker.GrantPermission(grant)
 		}
