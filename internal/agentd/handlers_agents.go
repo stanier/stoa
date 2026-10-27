@@ -107,6 +107,9 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	if agents == nil {
 		agents = []agentdb.Agent{}
 	}
+	for i := range agents {
+		redactAgentSecrets(r.Context(), &agents[i])
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(agents)
@@ -132,6 +135,10 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prepareNewAgent(r.Context(), &a)
+	if err := validateExternalURL(a.ExternalURL); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	if err := s.agentDB.CreateAgent(r.Context(), a); err != nil {
 		logging.Warnf("agentd: create agent %q: %v", a.Name, err)
@@ -151,6 +158,7 @@ func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request, name str
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
+	redactAgentSecrets(r.Context(), a)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(a)
 }
@@ -183,6 +191,10 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request, name 
 		return
 	}
 	prepareAgentUpdate(r.Context(), existing, &a)
+	if err := validateExternalURL(a.ExternalURL); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	if err := s.agentDB.UpdateAgent(r.Context(), name, a); err != nil {
 		logging.Warnf("agentd: update agent %q: %v", name, err)

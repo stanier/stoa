@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -600,7 +599,7 @@ func (s *Server) proxyACPRun(w http.ResponseWriter, r *http.Request, agent agent
 		proxyReq.Header.Set("Authorization", "Bearer "+key)
 	}
 
-	resp, err := s.httpClient.Do(proxyReq)
+	resp, err := s.externalAgentHTTPClient(agent).Do(proxyReq)
 	if err != nil {
 		http.Error(w, "external agent unreachable: "+err.Error(), http.StatusBadGateway)
 		return
@@ -614,20 +613,6 @@ func (s *Server) proxyACPRun(w http.ResponseWriter, r *http.Request, agent agent
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
-}
-
-// externalAgentAPIKey extracts an API key for an external agent from its metadata
-// (key "api_key") or falls back to the AGENTD_PROXY_API_KEY environment variable.
-func externalAgentAPIKey(agent agentdb.Agent) string {
-	if len(agent.Metadata) > 0 {
-		var m map[string]string
-		if json.Unmarshal(agent.Metadata, &m) == nil {
-			if k, ok := m["api_key"]; ok && k != "" {
-				return k
-			}
-		}
-	}
-	return os.Getenv("AGENTD_PROXY_API_KEY")
 }
 
 // acpMessagesToContent joins all text/plain parts from all messages into a single string.

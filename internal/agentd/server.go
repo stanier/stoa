@@ -75,8 +75,11 @@ type Server struct {
 	acpRuns   map[string]*ACPRun
 	acpRunsMu sync.RWMutex
 
-	// httpClient is used for proxying ACP runs to external agents.
+	// httpClient is used for proxying ACP runs to operator-provisioned external agents.
 	httpClient *http.Client
+	// publicHTTPClient is used for user-registered external agents; it can only
+	// reach public addresses (see newPublicOnlyHTTPClient).
+	publicHTTPClient *http.Client
 
 	// stopCh is closed when the server is stopping; signals background goroutines.
 	stopCh chan struct{}
@@ -164,6 +167,7 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		sessions:         make(map[string]*Session),
 		acpRuns:          make(map[string]*ACPRun),
 		httpClient:       &http.Client{Timeout: 5 * time.Minute},
+		publicHTTPClient: newPublicOnlyHTTPClient(5 * time.Minute),
 		stopCh:           make(chan struct{}),
 		metrics:          metrics,
 		promReg:          promReg,
