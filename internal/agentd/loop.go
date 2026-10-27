@@ -349,6 +349,28 @@ func sessionListTool(sess *Session) []llm.Tool {
 	}}
 }
 
+// toolAllowedForSession reports whether sess may execute the named tool.
+// A tool is allowed when it is in the session's filtered tool list
+// (sess.llmCtx.Tools). Per-session tools with no global counterpart
+// (list_tools, read_tool_result, wait_for_message) are session plumbing and
+// always allowed; per-session tools that shadow a global stub (spawn_agent and
+// friends) are subject to the same filter as the stub.
+func toolAllowedForSession(s *Server, sess *Session, name string) bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	for _, t := range sess.llmCtx.Tools {
+		if t.Name == name {
+			return true
+		}
+	}
+	if _, perSession := sess.perSessionTools[name]; perSession {
+		if _, global := s.skillRegistry.GetTool(name); !global {
+			return true
+		}
+	}
+	return false
+}
+
 // executeToolCall runs a single tool and appends the result as a user message.
 // Per-session tools (e.g. spawn_agent) are checked before the global skill registry
 // so that real implementations shadow stubs.
@@ -376,6 +398,13 @@ func executeToolCall(
 	sess.mu.Unlock()
 	if !ok {
 		tool, ok = s.skillRegistry.GetTool(toolUse.Name)
+	}
+	if ok && !toolAllowedForSession(s, sess, toolUse.Name) {
+		// The model only sees the session's filtered tool list, but it can still
+		// emit any tool name (e.g. via prompt injection). Treat a tool outside the
+		// session's allowlist as if it did not exist.
+		logging.Warnf("agentd: tool %q is not allowed in session %s", toolUse.Name, sess.id)
+		ok = false
 	}
 	if !ok {
 		s.metrics.toolCallsTotal.WithLabelValues(toolUse.Name, "not_found").Inc()

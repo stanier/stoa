@@ -37,6 +37,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 
 	sessionID := uuid.New().String()
 	sess := newSession(sessionID, req.Persona, req.Source, req.UserID, req.LLMKey, req.AllowedTools)
+	sess.toolsLocked = len(req.AllowedTools) > 0 && IsServiceFromContext(r.Context())
 	sess.tracer = app.SetupTracer(s.cfg, sessionID)
 
 	// Build the initial LLM context (system prompt + tools).
@@ -1045,6 +1046,14 @@ func (s *Server) handleSessionTools(w http.ResponseWriter, r *http.Request, sess
 		})
 
 	case http.MethodPatch:
+		sess.mu.Lock()
+		locked := sess.toolsLocked
+		sess.mu.Unlock()
+		if locked && !IsServiceFromContext(r.Context()) {
+			http.Error(w, "forbidden: tool restrictions for this session were set by a service account", http.StatusForbidden)
+			return
+		}
+
 		var patch struct {
 			AllowedTools []string `json:"allowed_tools"`
 		}

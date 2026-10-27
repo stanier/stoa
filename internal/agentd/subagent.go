@@ -154,9 +154,13 @@ func spawnSubAgentInSession(s *Server, sess *Session, persona, task string) stri
 
 	sess.mu.Lock()
 	sess.subAgents[agentID] = sa
+	parentTools := sess.llmCtx.Tools
 	sess.mu.Unlock()
 
 	childLLMCtx := app.BuildLLMContext(s.cfg, s.skillRegistry, s.promptReg, s.personaReg, persona, nil)
+	// A child may never use a tool its parent is not allowed to use, whatever
+	// persona the model asks for.
+	childLLMCtx.Tools = intersectTools(childLLMCtx.Tools, parentTools)
 
 	var childMessages []chat.Message
 	if childLLMCtx.SystemPrompt != "" {
@@ -415,6 +419,21 @@ func newChildSession(id, persona string, messages []chat.Message, llmCtx app.LLM
 		resultCache:     make(map[string]string),
 		createdAt:       time.Now(),
 	}
+}
+
+// intersectTools returns the tools in child whose names also appear in parent.
+func intersectTools(child, parent []llm.Tool) []llm.Tool {
+	allowed := make(map[string]bool, len(parent))
+	for _, t := range parent {
+		allowed[t.Name] = true
+	}
+	out := make([]llm.Tool, 0, len(child))
+	for _, t := range child {
+		if allowed[t.Name] {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // cancelAllSubAgents cancels every running sub-agent of sess. Safe to call
