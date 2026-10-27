@@ -181,6 +181,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
 	s.mux.HandleFunc("/oauth/login", s.handleLoginStart)
 	s.mux.HandleFunc("/oauth/login/poll", s.handleLoginPoll)
+	s.mux.HandleFunc("/oauth/login/confirm", s.handleLoginConfirm)
+	s.mux.HandleFunc("/oauth/login/exchange", s.handleLoginExchange)
 	s.mux.HandleFunc("/oauth/start", s.handleOAuthStart)
 	s.mux.HandleFunc("/oauth/callback", s.handleOAuthCallback)
 	s.mux.HandleFunc("/token/verify", s.handleTokenVerify)
@@ -219,7 +221,12 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 //
 // Response:
 //
-//	{ "login_id": "...", "url": "https://...", "expires_in": 300 }
+//	{ "login_id": "...", "url": "https://...", "user_code": "ABCD-EFGH", "expires_in": 300 }
+//
+// A terminal shows user_code; the browser shows the same code and asks the
+// user to confirm before the poll returns a token. With post_login_redirect,
+// the browser is sent back to that URL with ?login_id=...&code=..., and the
+// app exchanges the code at POST /oauth/login/exchange (see login_confirm.go).
 func (s *Server) handleLoginStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -285,6 +292,7 @@ func (s *Server) handleLoginStart(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"login_id":   loginID,
 		"url":        authURL,
+		"user_code":  loginUserCode(loginID),
 		"expires_in": int(loginTTL.Seconds()),
 	})
 }
@@ -297,7 +305,7 @@ func (s *Server) handleLoginStart(w http.ResponseWriter, r *http.Request) {
 //
 // Responses:
 //
-//	202 { "status": "pending" }              — browser flow not yet complete
+//	202 { "status": "pending" }              — browser flow not yet complete or confirmed
 //	200 { "session_token": "..." }           — success; use as Bearer token
 //	400 { "error": "..." }                   — flow failed or expired
 func (s *Server) handleLoginPoll(w http.ResponseWriter, r *http.Request) {
@@ -386,11 +394,11 @@ func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 // Upstream providers redirect here after the user approves (or denies) access.
 // Query params: code=<authorization_code>&state=<state>
 //
-// On success: exchanges the code, fetches userinfo, upserts user, creates session.
-// Responds with JSON: { "session_token": "..." }
-//
-// In a production UI you would redirect to a frontend page that reads the token
-// from a query param or cookie; for now we return JSON suitable for CLI/API use.
+// On success: exchanges the code, fetches userinfo and upserts the user. Then:
+//   - Zulip link flow: asks the user to confirm the link (no session).
+//   - Terminal login: asks the user to confirm; the poller gets the token after.
+//   - Web login: redirects to post_login_redirect with a one-time code.
+//   - Otherwise: responds with JSON { "session_token": "..." }.
 func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -466,34 +474,8 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawToken, _, err := s.db.CreateSession(ctx, userID, s.sessionTTL())
-	if err != nil {
-		logging.Warnf("authd: create session error: %v", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	// Provision the per-user stoa-infgw_* LLM key (best-effort — login succeeds even if apikeyd is down).
-	var llmKey string
-	if s.apikeydClient != nil {
-		if pk, pkErr := s.apikeydClient.ProvisionUserKey(ctx, userID, s.apikeydAdminToken); pkErr != nil {
-			logging.Warnf("authd: provision LLM key for user %s: %v", userID, pkErr)
-		} else {
-			llmKey = pk.Key
-		}
-	}
-
-	// Complete the polling login flow and get the BFF redirect URL in one query.
-	var postLoginRedirect string
-	if flow.LoginID != "" {
-		postLoginRedirect, err = s.db.CompleteLoginFlow(ctx, flow.LoginID, rawToken, llmKey)
-		if err != nil {
-			logging.Warnf("authd: complete login flow: %v", err)
-		}
-	}
-
 	// If this was a Zulip account link flow, ask the user to confirm the link
-	// before storing the email → user_id mapping.
+	// before storing the email → user_id mapping. No session is issued.
 	if flow.ZulipLinkToken != "" {
 		s.startZulipLinkConfirmation(w, r, flow.ZulipLinkToken, userID, info.Email)
 		return
@@ -502,25 +484,53 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	logging.Infof("authd: user %s (%s) authenticated via %s", userID, info.Email, p.id)
 
 	if flow.LoginID != "" {
-		if postLoginRedirect != "" {
-			// Web BFF flow — redirect browser back to the app with the token and LLM key.
-			dest := postLoginRedirect + "?token=" + rawToken
-			if llmKey != "" {
-				dest += "&llm_key=" + llmKey
-			}
-			http.Redirect(w, r, dest, http.StatusFound)
+		postLoginRedirect, err := s.db.LoginFlowRedirect(ctx, flow.LoginID)
+		if err != nil {
+			logging.Warnf("authd: login flow lookup: %v", err)
+			s.renderCallbackError(w, "This login has expired. Start it again.")
 			return
 		}
-		// CLI polling flow — render a friendly browser page; token goes to the poller.
-		s.renderCallbackSuccess(w, info.Email)
-	} else {
-		w.Header().Set("Content-Type", "application/json")
-		resp := map[string]string{"session_token": rawToken}
-		if llmKey != "" {
-			resp["llm_key"] = llmKey
+		if postLoginRedirect == "" {
+			// Terminal polling flow — the user confirms in the browser first;
+			// the token goes to the poller only after that.
+			s.startTerminalLoginConfirmation(w, r, flow.LoginID, userID, info.Email)
+			return
 		}
-		_ = json.NewEncoder(w).Encode(resp)
+
+		// Web BFF flow — redirect back with a one-time code. The app checks
+		// login_id against the cookie it set when the login started, then
+		// swaps the code for the token server-side.
+		rawToken, llmKey, err := s.issueSession(ctx, userID)
+		if err != nil {
+			logging.Warnf("authd: create session error: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		code, err := s.db.CompleteWebLoginFlow(ctx, flow.LoginID, rawToken, llmKey)
+		if err != nil {
+			logging.Warnf("authd: complete login flow: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		dest := postLoginRedirect + "?login_id=" + url.QueryEscape(flow.LoginID) + "&code=" + url.QueryEscape(code)
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		http.Redirect(w, r, dest, http.StatusFound)
+		return
 	}
+
+	rawToken, llmKey, err := s.issueSession(ctx, userID)
+	if err != nil {
+		logging.Warnf("authd: create session error: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	resp := map[string]string{"session_token": rawToken}
+	if llmKey != "" {
+		resp["llm_key"] = llmKey
+	}
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // renderCallbackSuccess renders a success page for a CLI-initiated browser login.

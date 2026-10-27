@@ -104,13 +104,13 @@ func (db *DB) CreateLoginFlow(ctx context.Context, providerID, authURL, postLogi
 	return id, nil
 }
 
-// CompleteLoginFlow records the session token and LLM key for a finished login.
-// Returns post_login_redirect so the callback can redirect the browser without a
-// second query. Returns ErrNotFound if id does not exist.
+// CompleteLoginFlow records the session token and LLM key for a confirmed
+// terminal (polling) login. Web flows use CompleteWebLoginFlow instead.
+// Returns ErrNotFound if id does not exist or is a web flow.
 func (db *DB) CompleteLoginFlow(ctx context.Context, id, sessionToken, llmKey string) (string, error) {
 	var postLoginRedirect string
 	err := db.pool.QueryRow(ctx,
-		`UPDATE login_flows SET session_token=$1, llm_key=$2 WHERE id=$3 RETURNING post_login_redirect`,
+		`UPDATE login_flows SET session_token=$1, llm_key=$2 WHERE id=$3 AND post_login_redirect = '' RETURNING post_login_redirect`,
 		sessionToken, llmKey, id,
 	).Scan(&postLoginRedirect)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -133,10 +133,15 @@ func (db *DB) FailLoginFlow(ctx context.Context, id, errMsg string) error {
 // ConsumeLoginFlow returns the current state of the login flow. done=false means
 // the browser flow has not yet completed. When done=true and errMsg is empty,
 // sessionToken and llmKey are populated. The entry is deleted once complete or failed.
+//
+// Web flows (those with a post_login_redirect) can't be polled: their token is
+// only released to ExchangeLoginCode, so knowing a login_id is not enough to
+// collect someone else's session.
 func (db *DB) ConsumeLoginFlow(ctx context.Context, id string) (sessionToken, llmKey, errMsg string, done bool, err error) {
-	const q = `SELECT session_token, llm_key, err_msg, expires_at FROM login_flows WHERE id = $1`
+	const q = `SELECT session_token, llm_key, err_msg, post_login_redirect, expires_at FROM login_flows WHERE id = $1`
 	var expiresAt time.Time
-	err = db.pool.QueryRow(ctx, q, id).Scan(&sessionToken, &llmKey, &errMsg, &expiresAt)
+	var postLoginRedirect string
+	err = db.pool.QueryRow(ctx, q, id).Scan(&sessionToken, &llmKey, &errMsg, &postLoginRedirect, &expiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", "", "unknown login_id", true, nil
 	}
@@ -147,11 +152,114 @@ func (db *DB) ConsumeLoginFlow(ctx context.Context, id string) (sessionToken, ll
 		_, _ = db.pool.Exec(ctx, `DELETE FROM login_flows WHERE id = $1`, id)
 		return "", "", "login expired", true, nil
 	}
+	if postLoginRedirect != "" {
+		return "", "", "browser login flows cannot be polled", true, nil
+	}
 	if sessionToken != "" || errMsg != "" {
 		_, _ = db.pool.Exec(ctx, `DELETE FROM login_flows WHERE id = $1`, id)
 		return sessionToken, llmKey, errMsg, true, nil
 	}
 	return "", "", "", false, nil
+}
+
+// LoginFlowRedirect returns the post_login_redirect of a login flow ("" for a
+// terminal/polling flow). Returns ErrNotFound if id does not exist.
+func (db *DB) LoginFlowRedirect(ctx context.Context, id string) (string, error) {
+	var redirect string
+	err := db.pool.QueryRow(ctx,
+		`SELECT post_login_redirect FROM login_flows WHERE id = $1`, id).Scan(&redirect)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("authdb: login flow redirect: %w", err)
+	}
+	return redirect, nil
+}
+
+// CompleteWebLoginFlow records the session token and LLM key for a finished
+// browser (post_login_redirect) login and returns a one-time exchange code.
+// Only its hash is stored; the token is released by ExchangeLoginCode.
+func (db *DB) CompleteWebLoginFlow(ctx context.Context, id, sessionToken, llmKey string) (string, error) {
+	code, err := generateToken()
+	if err != nil {
+		return "", fmt.Errorf("authdb: generate login exchange code: %w", err)
+	}
+	tag, err := db.pool.Exec(ctx,
+		`UPDATE login_flows SET session_token=$1, llm_key=$2, exchange_code_hash=$3
+		 WHERE id=$4 AND post_login_redirect <> ''`,
+		sessionToken, llmKey, hashToken(code), id)
+	if err != nil {
+		return "", fmt.Errorf("authdb: complete web login flow: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return "", ErrNotFound
+	}
+	return code, nil
+}
+
+// ExchangeLoginCode releases (and deletes) the session token of a completed
+// browser login, given its one-time exchange code. Returns ErrNotFound when
+// the id/code pair doesn't match a completed, unexpired flow.
+func (db *DB) ExchangeLoginCode(ctx context.Context, id, code string) (sessionToken, llmKey string, err error) {
+	if id == "" || code == "" {
+		return "", "", ErrNotFound
+	}
+	err = db.pool.QueryRow(ctx,
+		`DELETE FROM login_flows
+		 WHERE id=$1 AND exchange_code_hash=$2 AND session_token <> '' AND expires_at > now()
+		 RETURNING session_token, llm_key`,
+		id, hashToken(code)).Scan(&sessionToken, &llmKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", ErrNotFound
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("authdb: exchange login code: %w", err)
+	}
+	return sessionToken, llmKey, nil
+}
+
+// BeginLoginConfirmation records that userID signed in for a terminal login
+// flow and returns a one-time nonce the browser must present to confirm it.
+// No session exists until TakeLoginConfirmation succeeds.
+func (db *DB) BeginLoginConfirmation(ctx context.Context, id, userID string) (string, error) {
+	nonce, err := generateToken()
+	if err != nil {
+		return "", fmt.Errorf("authdb: generate login confirmation: %w", err)
+	}
+	tag, err := db.pool.Exec(ctx,
+		`UPDATE login_flows SET confirm_user_id=$1, confirm_nonce_hash=$2
+		 WHERE id=$3 AND post_login_redirect = '' AND session_token = '' AND err_msg = '' AND expires_at > now()`,
+		userID, hashToken(nonce), id)
+	if err != nil {
+		return "", fmt.Errorf("authdb: begin login confirmation: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return "", ErrNotFound
+	}
+	return nonce, nil
+}
+
+// TakeLoginConfirmation checks a confirmation nonce for a terminal login flow
+// and returns the user it was for. The confirmation is single-use.
+func (db *DB) TakeLoginConfirmation(ctx context.Context, id, nonce string) (string, error) {
+	if id == "" || nonce == "" {
+		return "", ErrNotFound
+	}
+	var userID string
+	err := db.pool.QueryRow(ctx,
+		`UPDATE login_flows f SET confirm_user_id='', confirm_nonce_hash=''
+		 FROM (SELECT id, confirm_user_id FROM login_flows WHERE id=$1 FOR UPDATE) old
+		 WHERE f.id = old.id AND f.confirm_nonce_hash=$2 AND old.confirm_user_id <> '' AND f.expires_at > now()
+		 RETURNING old.confirm_user_id`,
+		id, hashToken(nonce)).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("authdb: take login confirmation: %w", err)
+	}
+	return userID, nil
 }
 
 // CreateZulipLinkToken stores a short-lived Zulip account link token.
