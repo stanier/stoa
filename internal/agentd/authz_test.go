@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/stanier/stoa/internal/agentdb"
 	"github.com/stanier/stoa/internal/app"
 	"github.com/stanier/stoa/internal/llm"
 	"github.com/stanier/stoa/internal/skills"
@@ -312,5 +313,58 @@ func TestHandleDeleteSession_OtherUsersSessionForbidden(t *testing.T) {
 	}
 	if _, still := s.sessions["a"]; !still {
 		t.Fatal("session was deleted by a non-owner")
+	}
+}
+
+// --- #5: agent registry ownership ---
+
+func userCtx(userID string) context.Context {
+	return context.WithValue(context.Background(), ctxUserID, userID)
+}
+
+func serviceCtx() context.Context {
+	ctx := context.WithValue(context.Background(), ctxUserID, "svc")
+	return context.WithValue(ctx, ctxIsService, true)
+}
+
+func TestPrepareNewAgent_CallerOwnsWhatTheyCreate(t *testing.T) {
+	a := agentdb.Agent{Name: "mine", ID: "chosen-id", OwnerUserID: "bob"}
+	prepareNewAgent(userCtx("alice"), &a)
+	if a.OwnerUserID != "alice" {
+		t.Errorf("owner = %q, want alice", a.OwnerUserID)
+	}
+	if a.ID == "" || a.ID == "chosen-id" {
+		t.Errorf("ID = %q, want a server-generated ID", a.ID)
+	}
+
+	svc := agentdb.Agent{Name: "provisioned", OwnerUserID: "bob"}
+	prepareNewAgent(serviceCtx(), &svc)
+	if svc.OwnerUserID != "bob" || svc.ID == "" {
+		t.Errorf("service create: owner=%q id=%q", svc.OwnerUserID, svc.ID)
+	}
+}
+
+func TestPrepareAgentUpdate_OwnerCannotBeReassigned(t *testing.T) {
+	existing := &agentdb.Agent{Name: "mine", OwnerUserID: "alice"}
+	a := agentdb.Agent{OwnerUserID: "mallory"}
+	prepareAgentUpdate(userCtx("alice"), existing, &a)
+	if a.OwnerUserID != "alice" {
+		t.Errorf("owner reassigned to %q", a.OwnerUserID)
+	}
+}
+
+func TestCallerMayAccess_SeededAgentsAreServiceOnly(t *testing.T) {
+	seeded := &agentdb.Agent{Name: "coder"} // seeded from config: no owner
+	if callerMayAccess(userCtx("alice"), seeded.OwnerUserID) {
+		t.Error("a user may modify an unowned (seeded) agent")
+	}
+	if !callerMayAccess(serviceCtx(), seeded.OwnerUserID) {
+		t.Error("a service account may not modify a seeded agent")
+	}
+	if callerMayAccess(userCtx("bob"), "alice") {
+		t.Error("a user may modify another user's agent")
+	}
+	if !callerMayAccess(userCtx("alice"), "alice") {
+		t.Error("the owner may not modify their own agent")
 	}
 }

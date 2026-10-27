@@ -1,9 +1,12 @@
 package agentd
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/stanier/stoa/internal/agentdb"
 	"github.com/stanier/stoa/internal/app"
@@ -128,6 +131,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	prepareNewAgent(r.Context(), &a)
 
 	if err := s.agentDB.CreateAgent(r.Context(), a); err != nil {
 		logging.Warnf("agentd: create agent %q: %v", a.Name, err)
@@ -153,7 +157,7 @@ func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request, name str
 
 // handleUpdateAgent handles PUT /agents/{name}.
 func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request, name string) {
-	userID, ok := UserIDFromContext(r.Context())
+	_, ok := UserIDFromContext(r.Context())
 	isService := IsServiceFromContext(r.Context())
 	if !ok && !isService {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -165,8 +169,10 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request, name 
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
-	// Ownership check for non-service users.
-	if !isService && existing.OwnerUserID != "" && userID != existing.OwnerUserID {
+	// Ownership check: only the owner (or a service account) may modify an
+	// agent. Unowned agents, such as those seeded from config personas, are
+	// service-only.
+	if !callerMayAccess(r.Context(), existing.OwnerUserID) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -176,6 +182,7 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request, name 
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	prepareAgentUpdate(r.Context(), existing, &a)
 
 	if err := s.agentDB.UpdateAgent(r.Context(), name, a); err != nil {
 		logging.Warnf("agentd: update agent %q: %v", name, err)
@@ -187,7 +194,7 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request, name 
 
 // handleDeleteAgent handles DELETE /agents/{name}.
 func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request, name string) {
-	userID, ok := UserIDFromContext(r.Context())
+	_, ok := UserIDFromContext(r.Context())
 	isService := IsServiceFromContext(r.Context())
 	if !ok && !isService {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -199,7 +206,7 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request, name 
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
-	if !isService && existing.OwnerUserID != "" && userID != existing.OwnerUserID {
+	if !callerMayAccess(r.Context(), existing.OwnerUserID) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -219,7 +226,7 @@ func (s *Server) handlePublishAgent(w http.ResponseWriter, r *http.Request, name
 		return
 	}
 
-	userID, ok := UserIDFromContext(r.Context())
+	_, ok := UserIDFromContext(r.Context())
 	isService := IsServiceFromContext(r.Context())
 	if !ok && !isService {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -231,7 +238,7 @@ func (s *Server) handlePublishAgent(w http.ResponseWriter, r *http.Request, name
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
-	if !isService && existing.OwnerUserID != "" && userID != existing.OwnerUserID {
+	if !callerMayAccess(r.Context(), existing.OwnerUserID) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -251,7 +258,7 @@ func (s *Server) handleUnpublishAgent(w http.ResponseWriter, r *http.Request, na
 		return
 	}
 
-	userID, ok := UserIDFromContext(r.Context())
+	_, ok := UserIDFromContext(r.Context())
 	isService := IsServiceFromContext(r.Context())
 	if !ok && !isService {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -263,7 +270,7 @@ func (s *Server) handleUnpublishAgent(w http.ResponseWriter, r *http.Request, na
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
-	if !isService && existing.OwnerUserID != "" && userID != existing.OwnerUserID {
+	if !callerMayAccess(r.Context(), existing.OwnerUserID) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -274,6 +281,30 @@ func (s *Server) handleUnpublishAgent(w http.ResponseWriter, r *http.Request, na
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// prepareNewAgent fixes the server-controlled fields of an agent a caller asked
+// to create. A non-service caller always owns what it creates and cannot pick
+// the record ID; service accounts may set both (e.g. provisioning on a user's
+// behalf).
+func prepareNewAgent(ctx context.Context, a *agentdb.Agent) {
+	if !IsServiceFromContext(ctx) {
+		if callerID, ok := UserIDFromContext(ctx); ok {
+			a.OwnerUserID = callerID
+		}
+		a.ID = ""
+	}
+	if a.ID == "" {
+		a.ID = uuid.New().String()
+	}
+}
+
+// prepareAgentUpdate keeps a non-service caller from reassigning an agent's
+// owner through PUT /agents/{name}.
+func prepareAgentUpdate(ctx context.Context, existing *agentdb.Agent, a *agentdb.Agent) {
+	if !IsServiceFromContext(ctx) {
+		a.OwnerUserID = existing.OwnerUserID
+	}
 }
 
 // buildLLMContextFromDBAgent constructs an LLMContext from a published DB agent,
