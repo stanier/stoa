@@ -677,19 +677,16 @@ func (s *Server) serveWebSocket(ws *websocket.Conn, sess *Session, token string)
 		}
 	}()
 
-	// permForwarder: drains the global permission channels and forwards events to
-	// this session's client. MCP tools are registered globally (shared skillRegistry)
-	// and therefore send permission requests to s.permsSetup.RequestChan, not to
-	// per-session channels. Reading the global channels here is correct for the
-	// current single-session-per-connection model.
-	//
-	// TODO: for true multi-session concurrency, introduce per-session channel
-	// wrapping so requests can be routed to the correct WS connection.
+	// permForwarder: receives this session's permission requests and mentions
+	// from s.permRouter (which reads the global MCP permission channels and
+	// routes by session ID) and forwards them to this client.
 	var permReqChan <-chan *permissions.PermissionRequest
 	var permMentionChan <-chan *permissions.PermissionMention
-	if s.permsSetup != nil {
-		permReqChan = s.permsSetup.RequestChan
-		permMentionChan = s.permsSetup.MentionChan
+	if s.permRouter != nil {
+		sub, unsubscribe := s.permRouter.subscribe(sess.id)
+		defer unsubscribe()
+		permReqChan = sub.reqs
+		permMentionChan = sub.mentions
 	}
 
 	go func() {

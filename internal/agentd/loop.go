@@ -11,6 +11,7 @@ import (
 	"github.com/stanier/stoa/internal/chat"
 	"github.com/stanier/stoa/internal/llm"
 	"github.com/stanier/stoa/internal/logging"
+	"github.com/stanier/stoa/internal/permissions"
 	"github.com/stanier/stoa/internal/presidio"
 )
 
@@ -56,6 +57,12 @@ func runAgenticLoop(
 	sess *Session,
 	sendEvent func(agentproto.Event),
 ) (string, string, int, int, error) {
+	// Attribute permission prompts raised by tool calls to this session so the
+	// router delivers them to this session's client only. A sub-agent's context
+	// already carries its parent's ID, so its prompts go to the parent's client.
+	if permissions.SessionIDFromContext(ctx) == "" {
+		ctx = permissions.WithSessionID(ctx, sess.id)
+	}
 	var (
 		finalResponse  string
 		finalThinkingB strings.Builder

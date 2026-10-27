@@ -13,6 +13,7 @@ import (
 	"github.com/stanier/stoa/internal/chat"
 	"github.com/stanier/stoa/internal/llm"
 	"github.com/stanier/stoa/internal/logging"
+	"github.com/stanier/stoa/internal/permissions"
 	"github.com/stanier/stoa/internal/skills"
 )
 
@@ -141,6 +142,8 @@ func (t *SpawnAgentTool) Execute(ctx context.Context, params json.RawMessage) (s
 func spawnSubAgentInSession(s *Server, sess *Session, persona, task string) string {
 	agentID := uuid.New().String()
 	childCtx, cancel := context.WithTimeout(context.Background(), agenticLoopTimeout)
+	// Permission prompts from the child go to the parent session's client.
+	childCtx = permissions.WithSessionID(childCtx, sess.id)
 
 	inbox := make(chan string, 4)
 	sa := &SubAgent{

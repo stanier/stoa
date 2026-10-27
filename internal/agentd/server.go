@@ -40,6 +40,7 @@ type Server struct {
 	promptReg     *prompts.Registry
 	personaReg    *personas.Registry
 	permsSetup    *app.PermissionsSetup // may be nil when permissions disabled
+	permRouter    *permRouter           // routes permsSetup's events per session; nil when permissions disabled
 	mcpManager    *mcp.ServerManager   // may be nil if no MCP configured
 	agentSkills   []*agentskills.SkillMetadata
 
@@ -169,6 +170,11 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		metricsHandler:   promhttp.HandlerFor(promReg, promhttp.HandlerOpts{}),
 	}
 
+	if permsSetup != nil {
+		s.permRouter = newPermRouter()
+		go s.permRouter.run(permsSetup.RequestChan, permsSetup.MentionChan, s.stopCh)
+	}
+
 	// Background cleanup: remove completed/failed/cancelled runs older than 24h.
 	go func() {
 		ticker := time.NewTicker(time.Hour)
@@ -284,13 +290,10 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		if permsSetup != nil {
 			mcpOpts.PermChecker = permsSetup.Checker
 			mcpOpts.AuditLogger = permsSetup.AuditLogger
-			// Note: we do NOT use the global permsSetup channels here.
-			// Per-session channels are wired at session creation time via
-			// each session's permRequestChan / permMentionChan. The MCP tools
-			// are wrapped per-session in buildSessionLLMContext when needed.
-			// For simplicity, the global channels are used here as the initial
-			// registration channels; session-specific routing is handled by the
-			// WebSocket handlers that drain the per-session channels.
+			// MCP tools are registered once, globally, so they all send to the
+			// global channels. Each event carries the session ID from the tool
+			// call's context, and s.permRouter delivers it to that session's
+			// connection only.
 			mcpOpts.PermReqChan = permsSetup.RequestChan
 			mcpOpts.PermMentionChan = permsSetup.MentionChan
 		}

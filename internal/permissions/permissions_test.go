@@ -309,3 +309,30 @@ func TestExpiredPoliciesPruned(t *testing.T) {
 func timePtr(t time.Time) *time.Time {
 	return &t
 }
+
+func TestSessionGrantsAreScopedToTheirSession(t *testing.T) {
+	store := NewFileStore(t.TempDir() + "/permissions.yaml")
+	checker := NewDefaultChecker(NewDefaultManager(store), RankRequest)
+
+	checker.GrantPermission(PermissionGrant{
+		ToolPattern: "test_tool",
+		Scope:       "session",
+		GrantedAt:   time.Now(),
+		SessionID:   "session-a",
+	})
+
+	decision, _ := checker.Check(WithSessionID(context.Background(), "session-a"), "test_tool", "", nil)
+	if decision.Rank != RankSilent {
+		t.Error("expected the grant to apply in the session that made it")
+	}
+
+	decision, _ = checker.Check(WithSessionID(context.Background(), "session-b"), "test_tool", "", nil)
+	if !decision.RequiresPrompt {
+		t.Error("a session grant from session-a must not apply in session-b")
+	}
+
+	decision, _ = checker.Check(context.Background(), "test_tool", "", nil)
+	if !decision.RequiresPrompt {
+		t.Error("a session grant from session-a must not apply with no session in context")
+	}
+}
