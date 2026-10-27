@@ -180,3 +180,34 @@ func TestHandleSessionTools_PATCH_UserCreatedSessionStaysEditable(t *testing.T) 
 		t.Fatalf("got %d, want 204", rec.Code)
 	}
 }
+
+func TestHandleBranchSession_KeepsParentAllowlist(t *testing.T) {
+	s, _, shellTool := newAllowlistServer(t)
+	parent := restrictedSession(s, []string{"read_file"})
+	parent.toolsLocked = true
+	s.sessions[parent.id] = parent
+
+	req := httptest.NewRequest(http.MethodPost, "/branch", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	s.handleBranchSession(rec, req, parent)
+	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
+		t.Fatalf("branch: got %d", rec.Code)
+	}
+	var resp struct {
+		SessionID string `json:"session_id"`
+	}
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	branch := s.sessions[resp.SessionID]
+	if branch == nil {
+		t.Fatalf("branch session %q not registered", resp.SessionID)
+	}
+	if !branch.toolsLocked {
+		t.Error("branch lost the parent's tool lock")
+	}
+
+	out, _, _ := executeToolCall(context.Background(), s, branch,
+		&llm.ToolUse{Name: "shell_exec", Parameters: json.RawMessage(`{}`)}, 0)
+	if !strings.HasPrefix(out, "ERROR:") || shellTool.calls.Load() != 0 {
+		t.Fatal("branch could run a tool outside the parent's allowlist")
+	}
+}

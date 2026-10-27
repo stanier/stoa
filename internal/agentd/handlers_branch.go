@@ -37,6 +37,9 @@ func (s *Server) handleBranchSession(w http.ResponseWriter, r *http.Request, par
 	parentPersona := parent.persona
 	parentUserID := parent.userID
 	parentSource := parent.source
+	parentAllowed := parent.allowedTools
+	parentLocked := parent.toolsLocked
+	parentLLMKey := parent.llmKey
 	totalNonSys := nonSystemCount(parent.messages)
 	parent.mu.Unlock()
 
@@ -64,7 +67,10 @@ func (s *Server) handleBranchSession(w http.ResponseWriter, r *http.Request, par
 	}
 
 	newID := uuid.New().String()
-	newSess := newSession(newID, persona, parentSource, parentUserID, "", nil)
+	// The branch keeps the parent's tool allowlist (and its lock), so branching
+	// cannot be used to shed tool restrictions.
+	newSess := newSession(newID, persona, parentSource, parentUserID, parentLLMKey, parentAllowed)
+	newSess.toolsLocked = parentLocked
 	newSess.tracer = app.SetupTracer(s.cfg, newID)
 	newSess.llmCtx = app.BuildLLMContext(
 		s.cfg,
@@ -72,7 +78,7 @@ func (s *Server) handleBranchSession(w http.ResponseWriter, r *http.Request, par
 		s.promptReg,
 		s.personaReg,
 		persona,
-		nil,
+		parentAllowed,
 		s.agentSkills...,
 	)
 	newSess.perSessionTools["list_tools"] = newListToolsTool(&newSess.mu, &newSess.llmCtx)
