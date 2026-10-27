@@ -22,6 +22,9 @@ type OAuthFlow struct {
 // ZulipLinkEntry is the data stored for a pending Zulip account link token.
 type ZulipLinkEntry struct {
 	ZulipEmail string
+	// UserID is set only on a pending confirmation (see
+	// CreateZulipLinkConfirmation): the authd user the link would bind to.
+	UserID string
 }
 
 // BeginOAuthFlow generates a state token and PKCE code verifier, persists the
@@ -172,7 +175,7 @@ func (db *DB) PeekZulipLinkToken(ctx context.Context, token string) (*ZulipLinkE
 	var e ZulipLinkEntry
 	var expiresAt time.Time
 	err := db.pool.QueryRow(ctx,
-		`SELECT zulip_email, expires_at FROM zulip_link_tokens WHERE token = $1`,
+		`SELECT zulip_email, expires_at FROM zulip_link_tokens WHERE token = $1 AND user_id = ''`,
 		token).Scan(&e.ZulipEmail, &expiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -192,13 +195,53 @@ func (db *DB) ConsumeZulipLinkToken(ctx context.Context, token string) (*ZulipLi
 	var e ZulipLinkEntry
 	var expiresAt time.Time
 	err := db.pool.QueryRow(ctx,
-		`DELETE FROM zulip_link_tokens WHERE token = $1 RETURNING zulip_email, expires_at`,
+		`DELETE FROM zulip_link_tokens WHERE token = $1 AND user_id = '' RETURNING zulip_email, expires_at`,
 		token).Scan(&e.ZulipEmail, &expiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("authdb: consume zulip link token: %w", err)
+	}
+	if time.Now().After(expiresAt) {
+		return nil, ErrExpired
+	}
+	return &e, nil
+}
+
+// CreateZulipLinkConfirmation stores a pending Zulip link for userID and
+// returns a one-time nonce the user must present (form field and cookie) to
+// confirm it.
+func (db *DB) CreateZulipLinkConfirmation(ctx context.Context, zulipEmail, userID string, ttl time.Duration) (string, error) {
+	if userID == "" {
+		return "", fmt.Errorf("authdb: zulip link confirmation needs a user_id")
+	}
+	nonce, err := generateToken()
+	if err != nil {
+		return "", fmt.Errorf("authdb: generate zulip link confirmation: %w", err)
+	}
+	_, err = db.pool.Exec(ctx,
+		`INSERT INTO zulip_link_tokens (token, zulip_email, user_id, expires_at) VALUES ($1, $2, $3, $4)`,
+		nonce, zulipEmail, userID, time.Now().Add(ttl))
+	if err != nil {
+		return "", fmt.Errorf("authdb: create zulip link confirmation: %w", err)
+	}
+	return nonce, nil
+}
+
+// ConsumeZulipLinkConfirmation reads and deletes a pending confirmation.
+// Returns ErrNotFound if missing, ErrExpired if stale.
+func (db *DB) ConsumeZulipLinkConfirmation(ctx context.Context, nonce string) (*ZulipLinkEntry, error) {
+	var e ZulipLinkEntry
+	var expiresAt time.Time
+	err := db.pool.QueryRow(ctx,
+		`DELETE FROM zulip_link_tokens WHERE token = $1 AND user_id <> '' RETURNING zulip_email, user_id, expires_at`,
+		nonce).Scan(&e.ZulipEmail, &e.UserID, &expiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("authdb: consume zulip link confirmation: %w", err)
 	}
 	if time.Now().After(expiresAt) {
 		return nil, ErrExpired

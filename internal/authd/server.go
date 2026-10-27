@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 	"os"
@@ -190,6 +191,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/link/zulip/resolve", s.handleZulipLinkResolve)
 	s.mux.HandleFunc("/link/zulip/status", s.handleZulipLinkStatus)
 	s.mux.HandleFunc("/link/zulip/unlink", s.handleZulipUnlink)
+	s.mux.HandleFunc("/link/zulip/confirm", s.handleZulipLinkConfirm)
 	s.mux.HandleFunc("/link/zulip", s.handleZulipLinkBrowser)
 	// Account overview (used by webd /api/account)
 	s.mux.HandleFunc("/account/me", s.handleAccountMe)
@@ -490,18 +492,11 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// If this was a Zulip account link flow, store the email → user_id mapping.
+	// If this was a Zulip account link flow, ask the user to confirm the link
+	// before storing the email → user_id mapping.
 	if flow.ZulipLinkToken != "" {
-		linkEntry, err := s.db.ConsumeZulipLinkToken(ctx, flow.ZulipLinkToken)
-		if err != nil {
-			logging.Warnf("authd: zulip link callback: consume token: %v", err)
-		} else if dbErr := s.db.CreateZulipLink(ctx, linkEntry.ZulipEmail, userID); dbErr != nil {
-			logging.Warnf("authd: zulip link callback: store link: %v", dbErr)
-		} else {
-			logging.Infof("authd: linked Zulip %q → user %s", linkEntry.ZulipEmail, userID)
-			s.renderZulipLinkedPage(w, linkEntry.ZulipEmail)
-			return
-		}
+		s.startZulipLinkConfirmation(w, r, flow.ZulipLinkToken, userID, info.Email)
+		return
 	}
 
 	logging.Infof("authd: user %s (%s) authenticated via %s", userID, info.Email, p.id)
@@ -531,20 +526,20 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 // renderCallbackSuccess renders a success page for a CLI-initiated browser login.
 func (s *Server) renderCallbackSuccess(w http.ResponseWriter, email string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, callbackSuccessHTML, email)
+	fmt.Fprintf(w, callbackSuccessHTML, html.EscapeString(email))
 }
 
 // renderCallbackError renders an error page for a failed browser login.
 func (s *Server) renderCallbackError(w http.ResponseWriter, msg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadGateway)
-	fmt.Fprintf(w, callbackErrorHTML, msg)
+	fmt.Fprintf(w, callbackErrorHTML, html.EscapeString(msg))
 }
 
 // renderZulipLinkedPage shows a success page after a Zulip account link.
 func (s *Server) renderZulipLinkedPage(w http.ResponseWriter, zulipEmail string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, zulipLinkedHTML, zulipEmail)
+	fmt.Fprintf(w, zulipLinkedHTML, html.EscapeString(zulipEmail))
 }
 
 const zulipLinkedHTML = `<!DOCTYPE html>
