@@ -211,3 +211,106 @@ func TestHandleBranchSession_KeepsParentAllowlist(t *testing.T) {
 		t.Fatal("branch could run a tool outside the parent's allowlist")
 	}
 }
+
+// --- #6: session owner comes from the auth context ---
+
+func createSessionAs(t *testing.T, s *Server, r *http.Request) (int, *Session) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	s.handleCreateSession(rec, r)
+	if rec.Code != http.StatusCreated {
+		return rec.Code, nil
+	}
+	var resp struct {
+		SessionID string `json:"session_id"`
+	}
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	return rec.Code, s.sessions[resp.SessionID]
+}
+
+func TestHandleCreateSession_OwnerFromAuthContext(t *testing.T) {
+	s := newTestServer(t)
+
+	// Omitting user_id no longer creates an unowned session.
+	code, sess := createSessionAs(t, s, asUser(httptest.NewRequest(http.MethodPost, "/sessions", strings.NewReader(`{}`)), "alice"))
+	if code != http.StatusCreated || sess.userID != "alice" {
+		t.Fatalf("got code=%d owner=%q, want 201 alice", code, sess.userID)
+	}
+
+	// A user cannot create (and bill) a session as someone else.
+	code, _ = createSessionAs(t, s, asUser(httptest.NewRequest(http.MethodPost, "/sessions", strings.NewReader(`{"user_id":"bob"}`)), "alice"))
+	if code != http.StatusForbidden {
+		t.Fatalf("spoofed user_id: got %d, want 403", code)
+	}
+
+	// A service account (bridge) may create a session on a user's behalf.
+	code, sess = createSessionAs(t, s, asService(httptest.NewRequest(http.MethodPost, "/sessions", strings.NewReader(`{"user_id":"bob"}`)), "zulip-bridge"))
+	if code != http.StatusCreated || sess.userID != "bob" {
+		t.Fatalf("service: got code=%d owner=%q, want 201 bob", code, sess.userID)
+	}
+}
+
+func sessionSubrouteAs(s *Server, r *http.Request) int {
+	rec := httptest.NewRecorder()
+	s.handleSessionSubroute(rec, r)
+	return rec.Code
+}
+
+func TestHandleSessionSubroute_OwnershipEnforced(t *testing.T) {
+	s := newTestServer(t)
+	owned := newSession("owned", "", "web", "alice", "", nil)
+	unowned := newSession("unowned", "", "web", "", "", nil)
+	s.sessions["owned"] = owned
+	s.sessions["unowned"] = unowned
+
+	get := func(id string) *http.Request {
+		return httptest.NewRequest(http.MethodGet, "/sessions/"+id+"/messages", nil)
+	}
+	cases := []struct {
+		name string
+		req  *http.Request
+		want int
+	}{
+		{"owner", asUser(get("owned"), "alice"), http.StatusOK},
+		{"other user", asUser(get("owned"), "bob"), http.StatusForbidden},
+		{"unowned, user", asUser(get("unowned"), "bob"), http.StatusForbidden},
+		{"unowned, service", asService(get("unowned"), "svc"), http.StatusOK},
+		{"no auth configured", get("owned"), http.StatusOK},
+	}
+	for _, c := range cases {
+		if got := sessionSubrouteAs(s, c.req); got != c.want {
+			t.Errorf("%s: got %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+func TestHandleListSessions_InMemoryHidesOthersAndUnowned(t *testing.T) {
+	s := newTestServer(t)
+	s.sessions["a"] = newSession("a", "", "web", "alice", "", nil)
+	s.sessions["b"] = newSession("b", "", "web", "bob", "", nil)
+	s.sessions["u"] = newSession("u", "", "web", "", "", nil)
+
+	rec := httptest.NewRecorder()
+	s.handleListSessions(rec, asUser(httptest.NewRequest(http.MethodGet, "/sessions", nil), "alice"))
+	var infos []struct {
+		ID string `json:"id"`
+	}
+	_ = json.NewDecoder(rec.Body).Decode(&infos)
+	if len(infos) != 1 || infos[0].ID != "a" {
+		t.Fatalf("alice sees %+v, want only her own session", infos)
+	}
+}
+
+func TestHandleDeleteSession_OtherUsersSessionForbidden(t *testing.T) {
+	s := newTestServer(t)
+	s.sessions["a"] = newSession("a", "", "web", "alice", "", nil)
+
+	rec := httptest.NewRecorder()
+	s.handleDeleteSession(rec, asUser(httptest.NewRequest(http.MethodDelete, "/sessions/a", nil), "bob"), "a")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("got %d, want 403", rec.Code)
+	}
+	if _, still := s.sessions["a"]; !still {
+		t.Fatal("session was deleted by a non-owner")
+	}
+}

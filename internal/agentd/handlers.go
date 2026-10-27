@@ -35,6 +35,16 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The session's owner comes from the authenticated caller, not the request
+	// body. Only service accounts (bridges acting for a user) may name the owner.
+	if callerID, ok := UserIDFromContext(r.Context()); ok && !IsServiceFromContext(r.Context()) {
+		if req.UserID != "" && req.UserID != callerID {
+			http.Error(w, "forbidden: user_id does not match the authenticated user", http.StatusForbidden)
+			return
+		}
+		req.UserID = callerID
+	}
+
 	sessionID := uuid.New().String()
 	sess := newSession(sessionID, req.Persona, req.Source, req.UserID, req.LLMKey, req.AllowedTools)
 	sess.toolsLocked = len(req.AllowedTools) > 0 && IsServiceFromContext(r.Context())
@@ -129,13 +139,31 @@ func (s *Server) handleClearSession(w http.ResponseWriter, r *http.Request, sess
 // handleDeleteSession handles DELETE /sessions/:id.
 // Removes the session from memory and, if configured, from the database.
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, sessionID string) {
-	// Ownership check before deletion.
-	if !IsServiceFromContext(r.Context()) {
-		requesterID, _ := UserIDFromContext(r.Context())
-		s.mu.RLock()
-		sess, exists := s.sessions[sessionID]
-		s.mu.RUnlock()
-		if exists && sess.userID != "" && requesterID != "" && sess.userID != requesterID {
+	// Ownership check before deletion, whether the session is in memory or
+	// only in the database (evicted or not yet recovered).
+	s.mu.RLock()
+	sess, exists := s.sessions[sessionID]
+	s.mu.RUnlock()
+	if exists {
+		sess.mu.Lock()
+		owner := sess.userID
+		sess.mu.Unlock()
+		if !callerMayAccess(r.Context(), owner) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	} else if s.agentDB != nil {
+		ds, err := s.agentDB.GetSession(r.Context(), sessionID)
+		if err != nil {
+			logging.Errorf("agentd: db: get session %s for delete: %v", sessionID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if ds == nil {
+			http.Error(w, "session not found", http.StatusNotFound)
+			return
+		}
+		if !callerMayAccess(r.Context(), ds.UserID) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -237,8 +265,8 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	sessions := make([]*Session, 0, len(s.sessions))
 	for _, sess := range s.sessions {
-		// Exclude sessions explicitly owned by a different user.
-		if !isService && requesterID != "" && sess.userID != "" && sess.userID != requesterID {
+		// Only list sessions the caller may open.
+		if !callerMayAccess(r.Context(), sess.userID) {
 			continue
 		}
 		sessions = append(sessions, sess)

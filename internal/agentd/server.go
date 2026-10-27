@@ -582,14 +582,14 @@ func (s *Server) handleSessionSubroute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Ownership check: non-service users may not access sessions owned by someone else.
-	// Sessions with no userID (unowned/legacy) are accessible to any authenticated user.
-	if !IsServiceFromContext(r.Context()) {
-		requesterID, _ := UserIDFromContext(r.Context())
-		if sess.userID != "" && requesterID != "" && sess.userID != requesterID {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
+	// Ownership check: non-service users may only access their own sessions.
+	// Unowned (legacy) sessions are service-only.
+	sess.mu.Lock()
+	owner := sess.userID
+	sess.mu.Unlock()
+	if !callerMayAccess(r.Context(), owner) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
 	}
 
 	// /sessions/:id/subagents[/:agentID] — two-level path, handle before the switch.
