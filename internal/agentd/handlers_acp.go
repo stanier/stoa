@@ -137,16 +137,21 @@ func (s *Server) handleACPCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve or create session.
+	// Resolve or create session. Attaching to an existing session requires the
+	// same ownership as any other session access.
+	callerID, _ := UserIDFromContext(r.Context())
 	var sess *Session
 	if req.SessionID != "" {
-		s.mu.RLock()
-		sess = s.sessions[req.SessionID]
-		s.mu.RUnlock()
+		var allowed bool
+		sess, allowed = s.acpSessionForCaller(r.Context(), req.SessionID)
+		if !allowed {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 	}
 	if sess == nil {
 		sessionID := uuid.New().String()
-		userID, _ := UserIDFromContext(r.Context())
+		userID := callerID
 		sess = newSession(sessionID, dbAgent.Name, "acp", userID, "", dbAgent.AllowedTools)
 		sess.tracer = app.SetupTracer(s.cfg, sessionID)
 		sess.llmCtx = buildLLMContextFromDBAgent(s, dbAgent)
@@ -172,9 +177,10 @@ func (s *Server) handleACPCreateRun(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	run := &ACPRun{
 		ID:        runID,
-		SessionID: sess.id,
-		AgentName: req.AgentName,
-		Status:    ACPRunStatusCreated,
+		SessionID:   sess.id,
+		AgentName:   req.AgentName,
+		ownerUserID: callerID,
+		Status:      ACPRunStatusCreated,
 		CreatedAt: now,
 		eventCh:   make(chan agentproto.Event, 64),
 		cancel:    cancel,
@@ -397,6 +403,25 @@ func translateEventToSSE(ev agentproto.Event) (string, string) {
 	}
 }
 
+// acpSessionForCaller looks up an in-memory session a run wants to attach to.
+// It returns (nil, true) when there is no such session (a new one is created)
+// and (nil, false) when the session exists but belongs to someone else.
+func (s *Server) acpSessionForCaller(ctx context.Context, sessionID string) (*Session, bool) {
+	s.mu.RLock()
+	sess := s.sessions[sessionID]
+	s.mu.RUnlock()
+	if sess == nil {
+		return nil, true
+	}
+	sess.mu.Lock()
+	owner := sess.userID
+	sess.mu.Unlock()
+	if !callerMayAccess(ctx, owner) {
+		return nil, false
+	}
+	return sess, true
+}
+
 // handleACPRunSubroute dispatches GET /acp/runs/{id} and POST /acp/runs/{id}[/cancel].
 func (s *Server) handleACPRunSubroute(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/acp/runs/")
@@ -411,6 +436,11 @@ func (s *Server) handleACPRunSubroute(w http.ResponseWriter, r *http.Request) {
 	run, ok := s.acpRuns[runID]
 	s.acpRunsMu.RUnlock()
 	if !ok {
+		http.Error(w, "run not found", http.StatusNotFound)
+		return
+	}
+	if !callerMayAccess(r.Context(), run.ownerUserID) {
+		// Same answer as a missing run, so run IDs can't be probed.
 		http.Error(w, "run not found", http.StatusNotFound)
 		return
 	}
@@ -513,6 +543,14 @@ func (s *Server) handleACPSession(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 	if !ok {
 		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	sess.mu.Lock()
+	owner := sess.userID
+	sess.mu.Unlock()
+	if !callerMayAccess(r.Context(), owner) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 

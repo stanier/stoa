@@ -368,3 +368,69 @@ func TestCallerMayAccess_SeededAgentsAreServiceOnly(t *testing.T) {
 		t.Error("the owner may not modify their own agent")
 	}
 }
+
+// --- #7: ACP runs and sessions ---
+
+func TestACPSessionForCaller_CannotAttachToSomeoneElsesSession(t *testing.T) {
+	s := newTestServer(t)
+	s.sessions["alice-sess"] = newSession("alice-sess", "", "web", "alice", "", nil)
+
+	if sess, ok := s.acpSessionForCaller(userCtx("bob"), "alice-sess"); ok || sess != nil {
+		t.Fatal("bob attached a run to alice's session")
+	}
+	if sess, ok := s.acpSessionForCaller(userCtx("alice"), "alice-sess"); !ok || sess == nil {
+		t.Fatal("alice could not attach to her own session")
+	}
+	if sess, ok := s.acpSessionForCaller(userCtx("bob"), "missing"); !ok || sess != nil {
+		t.Fatal("a missing session should mean 'create a new one'")
+	}
+}
+
+func TestHandleACPRunSubroute_OwnerOnly(t *testing.T) {
+	s := newTestServer(t)
+	cancelled := false
+	s.acpRuns["run-1"] = &ACPRun{
+		ID: "run-1", SessionID: "x", ownerUserID: "alice",
+		Status: ACPRunStatusRunning, cancel: func() { cancelled = true },
+	}
+
+	for _, tc := range []struct {
+		method, path string
+	}{
+		{http.MethodGet, "/acp/runs/run-1"},
+		{http.MethodPost, "/acp/runs/run-1/cancel"},
+		{http.MethodPost, "/acp/runs/run-1"},
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(`{"request_id":"r","approved":true}`))
+		s.handleACPRunSubroute(rec, asUser(req, "bob"))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("bob %s %s: got %d, want 404", tc.method, tc.path, rec.Code)
+		}
+	}
+	if cancelled {
+		t.Fatal("bob cancelled alice's run")
+	}
+
+	rec := httptest.NewRecorder()
+	s.handleACPRunSubroute(rec, asUser(httptest.NewRequest(http.MethodGet, "/acp/runs/run-1", nil), "alice"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("alice GET own run: got %d", rec.Code)
+	}
+}
+
+func TestHandleACPSession_OwnerOnly(t *testing.T) {
+	s := newTestServer(t)
+	s.sessions["alice-sess"] = newSession("alice-sess", "", "acp", "alice", "", nil)
+
+	rec := httptest.NewRecorder()
+	s.handleACPSession(rec, asUser(httptest.NewRequest(http.MethodGet, "/acp/session/alice-sess", nil), "bob"))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("bob: got %d, want 403", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	s.handleACPSession(rec, asUser(httptest.NewRequest(http.MethodGet, "/acp/session/alice-sess", nil), "alice"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("alice: got %d, want 200", rec.Code)
+	}
+}
