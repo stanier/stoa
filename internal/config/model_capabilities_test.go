@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -79,5 +81,41 @@ func TestEndpoints(t *testing.T) {
 	pc := &LLMProviderConfig{APIURL: "http://x/v1", RealtimeURL: "ws://y/rt", DecisionURL: "http://z/d"}
 	if pc.RealtimeEndpoint() != "ws://y/rt" || pc.DecisionEndpoint() != "http://z/d" {
 		t.Error("explicit URLs should win")
+	}
+}
+
+// A decision provider must not pick up OpenAI credentials or URLs from the
+// environment, and gets Liquid defaults instead.
+func TestLoad_DecisionProviderEnvDefaults(t *testing.T) {
+	clearProviderEnvs(t)
+	t.Setenv("OPENAI_API_KEY", "sk-openai-should-not-leak")
+	t.Setenv("OPENAI_API_URL", "https://openai.example/v1")
+	t.Setenv("LIQUID_API_KEY", "liquid-key")
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Chdir(dir)
+	if err := os.MkdirAll(filepath.Join(dir, ".stoa", "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	yaml := "llm:\n  providers:\n    - name: chat\n      type: openai\n    - name: liquid\n      type: decision\n"
+	if err := os.WriteFile(filepath.Join(dir, ".stoa", "config", "config.yaml"), []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := cfg.LLM.GetProvider("liquid")
+	if pc == nil {
+		t.Fatal("liquid provider missing")
+	}
+	if pc.APIKey != "liquid-key" || pc.APIURL != DefaultLiquidDecisionURL || pc.Model != DefaultDecisionModel {
+		t.Fatalf("liquid provider = key %q url %q model %q", pc.APIKey, pc.APIURL, pc.Model)
+	}
+	if got := pc.DecisionEndpoint(); got != "https://api.liquid.ai/decisions/v1/systemone" {
+		t.Fatalf("DecisionEndpoint = %q", got)
+	}
+	if chat := cfg.LLM.GetProvider("chat"); chat.APIKey != "sk-openai-should-not-leak" {
+		t.Fatalf("openai provider should still read OPENAI_API_KEY, got %q", chat.APIKey)
 	}
 }

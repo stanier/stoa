@@ -773,6 +773,8 @@ func Load() (*Config, error) {
 		if keyEnv == "" {
 			if pc.Type == "anthropic" {
 				keyEnv = "ANTHROPIC_API_KEY"
+			} else if pc.Type == ProviderTypeDecision {
+				keyEnv = "LIQUID_API_KEY" // never fall back to an OpenAI key for a decision provider
 			} else {
 				keyEnv = "OPENAI_API_KEY"
 			}
@@ -781,6 +783,8 @@ func Load() (*Config, error) {
 		if urlEnv == "" {
 			if pc.Type == "anthropic" {
 				urlEnv = "ANTHROPIC_API_URL"
+			} else if pc.Type == ProviderTypeDecision {
+				urlEnv = "LIQUID_API_URL"
 			} else {
 				urlEnv = "OPENAI_API_URL"
 			}
@@ -798,6 +802,8 @@ func Load() (*Config, error) {
 		if pc.APIURL == "" {
 			if pc.Type == "anthropic" {
 				pc.APIURL = DefaultAnthropicURL
+			} else if pc.Type == ProviderTypeDecision {
+				pc.APIURL = DefaultLiquidDecisionURL
 			} else {
 				pc.APIURL = DefaultOpenAIURL
 			}

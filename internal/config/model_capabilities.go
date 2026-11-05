@@ -21,6 +21,12 @@ const (
 // has no chat endpoint, so agentd registers it without a chat client.
 const ProviderTypeDecision = "decision"
 
+// DefaultLiquidDecisionURL is the api_url of a "decision" provider with none
+// set: Liquid's hosted decision API. Its System One endpoint is
+// <base>/systemone. Credentials default to LIQUID_API_KEY (and the URL to
+// LIQUID_API_URL), never the OpenAI variables.
+const DefaultLiquidDecisionURL = "https://api.liquid.ai/decisions/v1"
+
 var knownCapabilities = map[string]bool{CapabilityVoice: true, CapabilityDecision: true}
 
 // Name-based guesses, used only when model_capabilities has no entry for a
