@@ -2,7 +2,9 @@
   import { onMount, onDestroy } from 'svelte'
   import { apiFetch } from './utils.js'
 
-  let { sessionId } = $props()
+  // onModelChange({ provider, model, capabilities }) fires whenever the
+  // effective model or its capabilities change (e.g. "voice", "decision").
+  let { sessionId, onModelChange } = $props()
 
   let providers     = $state([])
   let currentModel  = $state('')  // "provider/model"
@@ -116,6 +118,24 @@
     if (p?.models?.length) return { provider: p.name, model: p.models[0] }
     return { provider: 'default', model: '' }
   })
+
+  const CAP_TITLES = {
+    voice: 'Realtime voice-to-voice model',
+    decision: 'Decision model: answers questions with probabilities instead of chatting',
+  }
+
+  function capsFor(providerName, modelName) {
+    return providers.find(p => p.name === providerName)?.capabilities?.[modelName] ?? []
+  }
+
+  let displayCaps = $derived(capsFor(display.provider, display.model))
+
+  let lastEmitted = ''
+  $effect(() => {
+    const ev = { provider: display.provider, model: display.model, capabilities: displayCaps }
+    const key = JSON.stringify(ev)
+    if (key !== lastEmitted) { lastEmitted = key; onModelChange?.(ev) }
+  })
 </script>
 
 <svelte:window onclick={onOutsideClick} />
@@ -130,6 +150,7 @@
     <span class="provider">{display.provider}</span>
     <span class="slash">/</span>
     <span class="model">{display.model}</span>
+    {#each displayCaps as cap}<span class="cap" title={CAP_TITLES[cap] ?? cap}>{cap}</span>{/each}
     <svg class="chevron" width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
       <path d="M2 4l3 3 3-3"/>
     </svg>
@@ -169,6 +190,8 @@
               onclick={() => selectModel(prov.name, model)}
             >
               <span>{model}</span>
+              {#each capsFor(prov.name, model) as cap}<span class="cap" title={CAP_TITLES[cap] ?? cap}>{cap}</span>{/each}
+              <span class="row-spacer"></span>
               {#if currentModel === key}
                 <span class="checkmark">✓</span>
               {/if}
@@ -244,4 +267,12 @@
   .model-row.selected { color: var(--accent-light); }
 
   .checkmark { font-size: 0.7rem; color: var(--accent); }
+
+  .row-spacer { flex: 1; }
+  .cap {
+    font-family: system-ui, sans-serif; font-size: 0.6rem; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--text3);
+    border: 1px solid var(--border); border-radius: 4px; padding: 0.05rem 0.3rem;
+    margin-left: 0.4rem; line-height: 1.3;
+  }
 </style>
