@@ -6,6 +6,8 @@ import (
 )
 
 // ClientConn is the browser side of a bridge (a WebSocket in agentd).
+// Bridge calls WriteEvent from two goroutines, so it must be safe for
+// concurrent use.
 type ClientConn interface {
 	ReadEvent() (ClientEvent, error)
 	WriteEvent(ServerEvent) error

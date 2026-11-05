@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -144,8 +145,13 @@ var voiceUpgrader = websocket.Upgrader{
 	WriteBufferSize: 32 << 10,
 }
 
-// voiceConn adapts a gorilla WebSocket to realtime.ClientConn.
-type voiceConn struct{ c *websocket.Conn }
+// voiceConn adapts a gorilla WebSocket to realtime.ClientConn. Bridge
+// writes from two goroutines (replies and "malformed event" notices), and
+// gorilla allows one writer at a time, hence the mutex.
+type voiceConn struct {
+	c  *websocket.Conn
+	mu *sync.Mutex
+}
 
 func (v voiceConn) ReadEvent() (realtime.ClientEvent, error) {
 	var ev realtime.ClientEvent
@@ -160,6 +166,8 @@ func (v voiceConn) ReadEvent() (realtime.ClientEvent, error) {
 }
 
 func (v voiceConn) WriteEvent(ev realtime.ServerEvent) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	_ = v.c.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	return v.c.WriteJSON(ev)
 }
@@ -211,7 +219,7 @@ func (s *Server) handleRealtime(w http.ResponseWriter, r *http.Request) {
 
 	userID, _ := UserIDFromContext(r.Context())
 	logging.Infof("agentd: realtime: voice session start provider=%s model=%s user=%s", pc.Name, model, userID)
-	if err := realtime.Bridge(r.Context(), voiceConn{conn}, sess); err != nil && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+	if err := realtime.Bridge(r.Context(), voiceConn{c: conn, mu: &sync.Mutex{}}, sess); err != nil && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 		logging.Debugf("agentd: realtime: session ended: %v", err)
 	}
 	logging.Infof("agentd: realtime: voice session end provider=%s model=%s user=%s", pc.Name, model, userID)
