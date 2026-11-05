@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 )
@@ -327,7 +328,7 @@ func parseAnswer(name string, raw json.RawMessage, q *Question) (Answer, error) 
 		}
 		p := *w.Noul
 		a.Value = &p
-		a.Options = []Option{{Key: "true", Label: "yes", Probability: p}, {Key: "false", Label: "no", Probability: 1 - p}}
+		a.Options = []Option{{Key: "true", Label: "yes", Probability: p}, {Key: "false", Label: "no", Probability: math.Round((1-p)*1e9) / 1e9}}
 		a.Pick = "false"
 		if p >= 0.5 {
 			a.Pick = "true"
