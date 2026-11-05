@@ -225,6 +225,18 @@ type LLMProviderConfig struct {
 	Stop                 []string `mapstructure:"stop"`
 	EnableThinking       *bool    `mapstructure:"enable_thinking"`        // Anthropic native; OpenAI passed as extra body fields
 	ThinkingBudgetTokens *int     `mapstructure:"thinking_budget_tokens"` // Anthropic native; OpenAI passed as extra body fields
+
+	// ModelCapabilities declares non-chat capabilities per model ID, e.g.
+	//   model_capabilities: { "LFM3-Omni-2B": [voice], "d1": [decision] }
+	// A trailing "*" in a key matches by prefix. An explicit empty list turns
+	// off the name-based guess for that model. See model_capabilities.go.
+	ModelCapabilities map[string][]string `mapstructure:"model_capabilities"`
+	// RealtimeURL is the WebSocket URL of a realtime voice endpoint (llama.cpp
+	// /v1/realtime). Derived from api_url when empty.
+	RealtimeURL string `mapstructure:"realtime_url"`
+	// DecisionURL is the URL of a decision endpoint (Liquid / Ollama
+	// /v1/systemone). Derived from api_url when empty.
+	DecisionURL string `mapstructure:"decision_url"`
 }
 
 // LLMConfig holds the multi-provider LLM configuration.
@@ -500,6 +512,7 @@ const (
 	DefaultOpenAIURL      = "https://api.openai.com/v1"
 	DefaultAnthropicURL   = "https://api.anthropic.com"
 	DefaultOpenAIModel    = "gpt-4o"
+	DefaultDecisionModel  = "d1" // model for a "decision" provider with no model set
 	DefaultAnthropicModel = "claude-sonnet-4-5-20250929"
 	DefaultMaxTokens      = 4096
 	DefaultTheme          = "dark"
@@ -760,6 +773,8 @@ func Load() (*Config, error) {
 		if keyEnv == "" {
 			if pc.Type == "anthropic" {
 				keyEnv = "ANTHROPIC_API_KEY"
+			} else if pc.Type == ProviderTypeDecision {
+				keyEnv = "LIQUID_API_KEY" // never fall back to an OpenAI key for a decision provider
 			} else {
 				keyEnv = "OPENAI_API_KEY"
 			}
@@ -768,6 +783,8 @@ func Load() (*Config, error) {
 		if urlEnv == "" {
 			if pc.Type == "anthropic" {
 				urlEnv = "ANTHROPIC_API_URL"
+			} else if pc.Type == ProviderTypeDecision {
+				urlEnv = "LIQUID_API_URL"
 			} else {
 				urlEnv = "OPENAI_API_URL"
 			}
@@ -785,6 +802,8 @@ func Load() (*Config, error) {
 		if pc.APIURL == "" {
 			if pc.Type == "anthropic" {
 				pc.APIURL = DefaultAnthropicURL
+			} else if pc.Type == ProviderTypeDecision {
+				pc.APIURL = DefaultLiquidDecisionURL
 			} else {
 				pc.APIURL = DefaultOpenAIURL
 			}
@@ -793,6 +812,8 @@ func Load() (*Config, error) {
 		if pc.Model == "" {
 			if pc.Type == "anthropic" {
 				pc.Model = DefaultAnthropicModel
+			} else if pc.Type == ProviderTypeDecision {
+				pc.Model = DefaultDecisionModel
 			} else {
 				pc.Model = DefaultOpenAIModel
 			}

@@ -37,6 +37,17 @@ llm:
     #   max_tokens: 8000
     #   api_key_env: ANTHROPIC_API_KEY
 
+    # Voice (omni) and decision models — see docs/VOICE_AND_DECISION_MODELS.md
+    # - name: llama
+    #   type: openai
+    #   api_url: http://llama:8080/v1         # llama.cpp v0.8.0+; /v1/realtime derived
+    #   model: LFM3-Omni-2B
+    #   models: [LFM3-Omni-2B]
+    #   model_capabilities: { "LFM3-Omni-*": [voice] }
+    # - name: liquid
+    #   type: decision                        # Liquid hosted d1; key from LIQUID_API_KEY
+    #   models: [d1]
+
     # Arcee AI (OpenAI-compatible)
     # - name: arcee
     #   type: openai

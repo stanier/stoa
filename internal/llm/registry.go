@@ -14,6 +14,9 @@ import (
 type RegistryModel struct {
 	Provider string `json:"provider"`
 	ID       string `json:"id"`
+	// Capabilities lists non-chat capabilities ("voice", "decision"); see
+	// config.LLMProviderConfig.CapabilitiesFor.
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // ProviderEntry is a named LLM client in the registry.
@@ -26,11 +29,12 @@ type ProviderEntry struct {
 // ProviderRegistry holds one or more named LLM clients and their discovered models.
 type ProviderRegistry struct {
 	mu          sync.RWMutex
-	clients     map[string]Client   // provider name → client
-	models      map[string][]string // provider name → model IDs (sorted)
-	types       map[string]string   // provider name → "openai"/"anthropic"
-	order       []string            // insertion order for stable listing
-	defaultName string              // name of the default provider
+	clients     map[string]Client                    // provider name → client
+	models      map[string][]string                  // provider name → model IDs (sorted)
+	types       map[string]string                    // provider name → "openai"/"anthropic"
+	configs     map[string]*config.LLMProviderConfig // provider name → its config
+	order       []string                             // insertion order for stable listing
+	defaultName string                               // name of the default provider
 }
 
 // NewProviderRegistry creates a registry from a Config.
@@ -42,6 +46,7 @@ func NewProviderRegistry(cfg *config.Config) *ProviderRegistry {
 		clients: make(map[string]Client),
 		models:  make(map[string][]string),
 		types:   make(map[string]string),
+		configs: make(map[string]*config.LLMProviderConfig),
 	}
 
 	if cfg == nil {
@@ -75,6 +80,8 @@ func (r *ProviderRegistry) registerProvider(pc *config.LLMProviderConfig) {
 		client, err = NewAnthropicClient(pc)
 	case "gemini":
 		client, err = NewGeminiClient(pc.APIKey, pc.APIURL, pc.Model, pc.MaxTokens, nil)
+	case config.ProviderTypeDecision:
+		client = newDecisionOnlyClient(pc)
 	default:
 		client, err = NewOpenAIClient(pc)
 	}
@@ -85,6 +92,7 @@ func (r *ProviderRegistry) registerProvider(pc *config.LLMProviderConfig) {
 
 	r.clients[pc.Name] = client
 	r.types[pc.Name] = pc.Type
+	r.configs[pc.Name] = pc
 	r.order = append(r.order, pc.Name)
 
 	// Seed model list: static list takes priority, otherwise seed with the active model.
@@ -124,11 +132,43 @@ func (r *ProviderRegistry) ListAllModels() []RegistryModel {
 
 	var result []RegistryModel
 	for _, name := range r.order {
+		pc := r.configs[name]
 		for _, id := range r.models[name] {
-			result = append(result, RegistryModel{Provider: name, ID: id})
+			m := RegistryModel{Provider: name, ID: id}
+			if pc != nil {
+				m.Capabilities = pc.CapabilitiesFor(id)
+			}
+			result = append(result, m)
 		}
 	}
 	return result
+}
+
+// ProviderConfig returns the named provider's config ("default" resolves to
+// the default provider). Callers must not modify it.
+func (r *ProviderRegistry) ProviderConfig(name string) (*config.LLMProviderConfig, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if name == "default" {
+		name = r.defaultName
+	}
+	pc, ok := r.configs[name]
+	return pc, ok
+}
+
+// HasModel reports whether the named provider lists model.
+func (r *ProviderRegistry) HasModel(provider, model string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if provider == "default" {
+		provider = r.defaultName
+	}
+	for _, id := range r.models[provider] {
+		if id == model {
+			return true
+		}
+	}
+	return false
 }
 
 // ProviderNames returns the names of all registered providers in insertion order.

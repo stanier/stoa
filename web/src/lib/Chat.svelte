@@ -3,6 +3,9 @@
   import SettingsPanel from './SettingsPanel.svelte'
   import ToolsPanel from './ToolsPanel.svelte'
   import ModelPicker from './ModelPicker.svelte'
+  import VoicePanel from './VoicePanel.svelte'
+  import DecisionComposer from './DecisionComposer.svelte'
+  import DecisionResult from './DecisionResult.svelte'
   import { apiFetch } from './utils.js'
   import { marked } from 'marked'
   import hljs from 'highlight.js/lib/core'
@@ -111,6 +114,53 @@
   let ws            = null
   let msgEnd        = null
   let destroyed     = false
+
+  // ── Model capabilities: voice mode and decision models ───────────────────
+  let activeModel = $state({ provider: '', model: '', capabilities: [] })
+  let voiceOn     = $state(false)
+  let isVoice     = $derived(activeModel.capabilities.includes('voice'))
+  let isDecision  = $derived(activeModel.capabilities.includes('decision'))
+
+  function onModelChange(m) {
+    activeModel = m
+    if (!m.capabilities.includes('voice')) voiceOn = false
+  }
+
+  // Voice turns are shown in the message list but are not part of the chat
+  // session's saved history.
+  function voiceAssistantMsg() {
+    const last = messages.at(-1)
+    return last?.kind === 'assistant' && last.voice && last.streaming ? last : null
+  }
+
+  function onVoiceUserTranscript(text) {
+    if (!text?.trim()) return
+    const row = { kind: 'user', content: text.trim(), attachments: [], voice: true }
+    // The transcript can land after the reply has started; keep it above.
+    if (voiceAssistantMsg()) messages = [...messages.slice(0, -1), row, messages.at(-1)]
+    else messages = [...messages, row]
+    scrollToBottom()
+  }
+
+  function onVoiceAssistantDelta(text) {
+    const cur = voiceAssistantMsg()
+    if (cur) { cur.content += text; messages = messages }
+    else {
+      messages = [...messages, { kind: 'assistant', content: text, thinking: '', streaming: true, voice: true,
+        timestamp: new Date().toISOString() }]
+    }
+    scrollToBottom()
+  }
+
+  function onVoiceAssistantDone() {
+    const cur = voiceAssistantMsg()
+    if (cur) { cur.streaming = false; messages = messages }
+  }
+
+  function onDecisionResult(entry) {
+    messages = [...messages, { kind: 'decision', entry }]
+    scrollToBottom()
+  }
 
   onMount(async () => {
     await loadHistory()
@@ -810,6 +860,10 @@
   }
   button.send:hover:not(:disabled) { background: var(--accent-light); }
   button.send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  button.attach.mic.active { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+  .voice-mark { font-size: 0.75rem; opacity: 0.7; margin-right: 0.3rem; }
+  .msg-decision { display: flex; padding: 0.25rem 0; }
 </style>
 
 {#if permRequest}
@@ -838,7 +892,7 @@
       <span class="session-title">{liveTitle}</span>
     {/if}
     <div class="header-right">
-      <ModelPicker {sessionId} />
+      <ModelPicker {sessionId} {onModelChange} />
       <button class="icon-btn" class:active={toolsOpen}
         onclick={() => { toolsOpen = !toolsOpen; if (toolsOpen) settingsOpen = false }}
         title="Tools">
@@ -863,6 +917,7 @@
       {#if msg.kind === 'user'}
         <div class="msg-user">
           <div class="bubble-user">
+            {#if msg.voice}<span class="voice-mark" title="Spoken in voice mode"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/></svg></span>{/if}
             {#if msg.attachments?.length}
               <div class="hist-attachments">
                 {#each msg.attachments as f}
@@ -944,6 +999,11 @@
           </div>
         </div>
 
+      {:else if msg.kind === 'decision'}
+        <div class="msg-decision">
+          <DecisionResult entry={msg.entry} />
+        </div>
+
       {:else if msg.kind === 'compaction'}
         <div class="msg-compaction">
           <div class="compaction-notice">
@@ -961,6 +1021,20 @@
     <div class="error-banner">{error}</div>
   {/if}
 
+  {#if voiceOn && isVoice}
+    {#key `${activeModel.provider}/${activeModel.model}`}
+      <VoicePanel provider={activeModel.provider} model={activeModel.model}
+        onUserTranscript={onVoiceUserTranscript}
+        onAssistantDelta={onVoiceAssistantDelta}
+        onAssistantDone={onVoiceAssistantDone}
+        onClose={() => { voiceOn = false }} />
+    {/key}
+  {/if}
+
+  {#if isDecision}
+    <DecisionComposer provider={activeModel.provider} model={activeModel.model}
+      onResult={onDecisionResult} disabled={!!permRequest} />
+  {:else}
   {#if pendingFiles.length}
     <div class="pending-files">
       {#each pendingFiles as f ((f.attachmentId || f.path))}
@@ -1003,11 +1077,19 @@
       disabled={!connected || !!permRequest}
       rows="1"
     ></textarea>
+    {#if isVoice}
+      <button class="attach mic" class:active={voiceOn}
+        onclick={() => { voiceOn = !voiceOn }}
+        title={voiceOn ? 'End voice mode' : 'Talk to this model (voice mode)'}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/></svg>
+      </button>
+    {/if}
     <button class="send" onclick={send}
       disabled={!connected || (!input.trim() && !pendingFiles.length) || !!permRequest}>
       Send
     </button>
   </div>
+  {/if}
 </div>
 
 <div class="panel-slot" style="width: {settingsOpen ? '260px' : toolsOpen ? '280px' : '0px'}">

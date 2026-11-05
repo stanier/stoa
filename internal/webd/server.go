@@ -90,6 +90,9 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("/api/sessions", s.requireAuth(http.HandlerFunc(s.handleSessionsProxy)))
 	s.mux.Handle("/api/sessions/", s.requireAuth(http.HandlerFunc(s.handleSessionsProxy)))
 	s.mux.Handle("/api/models", s.requireAuth(http.HandlerFunc(s.handleModelsProxy)))
+	s.mux.Handle("/api/decisions", s.requireAuth(http.HandlerFunc(s.handleDecisionsProxy)))
+	// Voice WebSocket proxy — session validated inside handler, like /ws/.
+	s.mux.HandleFunc("/api/realtime", s.handleRealtimeProxy)
 	s.mux.Handle("/api/apikeys", s.requireAuth(http.HandlerFunc(s.handleAPIKeysProxy)))
 	s.mux.Handle("/api/apikeys/", s.requireAuth(http.HandlerFunc(s.handleAPIKeysProxy)))
 	s.mux.Handle("/api/agents", s.requireAuth(http.HandlerFunc(s.handleAgentsProxy)))
