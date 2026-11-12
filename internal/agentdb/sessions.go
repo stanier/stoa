@@ -25,15 +25,23 @@ type Session struct {
 	LastInputTokens   int
 	TotalOutputTokens int
 	Overrides         json.RawMessage // llm_overrides column; nil means no overrides
+	AllowedTools      []string        // nil means the persona's full tool set
+	ToolsLocked       bool            // a service account set AllowedTools; the owner may not change it
 }
 
-// CreateSession inserts a new session record.
-func (d *DB) CreateSession(ctx context.Context, id, userID, persona, source string) error {
+// ToolLimits are the tool restrictions stored with a session.
+type ToolLimits struct {
+	AllowedTools []string // nil means no restriction beyond the persona
+	Locked       bool
+}
+
+// CreateSession inserts a new session record with its tool limits.
+func (d *DB) CreateSession(ctx context.Context, id, userID, persona, source string, limits ToolLimits) error {
 	const q = `
-		INSERT INTO agentd_sessions (id, user_id, persona, source)
-		VALUES ($1, NULLIF($2,''), $3, $4)
+		INSERT INTO agentd_sessions (id, user_id, persona, source, allowed_tools, tools_locked)
+		VALUES ($1, NULLIF($2,''), $3, $4, $5, $6)
 		ON CONFLICT (id) DO NOTHING`
-	if _, err := d.pool.Exec(ctx, q, id, userID, persona, source); err != nil {
+	if _, err := d.pool.Exec(ctx, q, id, userID, persona, source, limits.AllowedTools, limits.Locked); err != nil {
 		return fmt.Errorf("agentdb: create session: %w", err)
 	}
 	return nil
@@ -48,12 +56,14 @@ func (d *DB) ListSessions(ctx context.Context, userID string) ([]Session, error)
 	const qAll = `
 		SELECT id, COALESCE(user_id,''), persona, source, title, COALESCE(project_id,''),
 		       COALESCE(parent_session_id,''), COALESCE(branch_point,0),
-		       created_at, last_active_at, last_input_tokens, total_output_tokens, llm_overrides
+		       created_at, last_active_at, last_input_tokens, total_output_tokens, llm_overrides,
+		       allowed_tools, tools_locked
 		FROM agentd_sessions ORDER BY last_active_at DESC`
 	const qUser = `
 		SELECT id, COALESCE(user_id,''), persona, source, title, COALESCE(project_id,''),
 		       COALESCE(parent_session_id,''), COALESCE(branch_point,0),
-		       created_at, last_active_at, last_input_tokens, total_output_tokens, llm_overrides
+		       created_at, last_active_at, last_input_tokens, total_output_tokens, llm_overrides,
+		       allowed_tools, tools_locked
 		FROM agentd_sessions
 		WHERE user_id=$1 OR user_id IS NULL
 		ORDER BY last_active_at DESC`
@@ -97,14 +107,15 @@ func (d *DB) GetSession(ctx context.Context, id string) (*Session, error) {
 	const q = `
 		SELECT id, COALESCE(user_id,''), persona, source, title, COALESCE(project_id,''),
 		       COALESCE(parent_session_id,''), COALESCE(branch_point,0),
-		       created_at, last_active_at, last_input_tokens, total_output_tokens, llm_overrides
+		       created_at, last_active_at, last_input_tokens, total_output_tokens, llm_overrides,
+		       allowed_tools, tools_locked
 		FROM agentd_sessions WHERE id=$1`
 	var s Session
 	err := d.pool.QueryRow(ctx, q, id).Scan(
 		&s.ID, &s.UserID, &s.Persona, &s.Source, &s.Title, &s.ProjectID,
 		&s.ParentSessionID, &s.BranchPoint,
 		&s.CreatedAt, &s.LastActiveAt, &s.LastInputTokens, &s.TotalOutputTokens,
-		&s.Overrides,
+		&s.Overrides, &s.AllowedTools, &s.ToolsLocked,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -133,6 +144,17 @@ func (d *DB) UpdateTitle(ctx context.Context, id, title string) error {
 	return err
 }
 
+// UpdateToolLimits replaces a session's stored tool limits.
+func (d *DB) UpdateToolLimits(ctx context.Context, id string, limits ToolLimits) error {
+	_, err := d.pool.Exec(ctx,
+		`UPDATE agentd_sessions SET allowed_tools=$2, tools_locked=$3 WHERE id=$1`,
+		id, limits.AllowedTools, limits.Locked)
+	if err != nil {
+		return fmt.Errorf("agentdb: update tool limits: %w", err)
+	}
+	return nil
+}
+
 // UpdateOverrides persists per-session LLM overrides (provider/model/params) as JSONB.
 func (d *DB) UpdateOverrides(ctx context.Context, id string, overrides json.RawMessage) error {
 	_, err := d.pool.Exec(ctx,
@@ -154,7 +176,7 @@ func (d *DB) SearchSessions(ctx context.Context, userID, q string) ([]Session, e
 		       s.id, COALESCE(s.user_id,''), s.persona, s.source, s.title,
 		       COALESCE(s.project_id,''), COALESCE(s.parent_session_id,''), COALESCE(s.branch_point,0),
 		       s.created_at, s.last_active_at, s.last_input_tokens, s.total_output_tokens,
-		       s.llm_overrides
+		       s.llm_overrides, s.allowed_tools, s.tools_locked
 		FROM agentd_sessions s
 		LEFT JOIN agentd_messages m ON m.session_id = s.id
 		WHERE plainto_tsquery('english', $1) @@ to_tsvector('english', s.title)
@@ -165,7 +187,7 @@ func (d *DB) SearchSessions(ctx context.Context, userID, q string) ([]Session, e
 		       s.id, COALESCE(s.user_id,''), s.persona, s.source, s.title,
 		       COALESCE(s.project_id,''), COALESCE(s.parent_session_id,''), COALESCE(s.branch_point,0),
 		       s.created_at, s.last_active_at, s.last_input_tokens, s.total_output_tokens,
-		       s.llm_overrides
+		       s.llm_overrides, s.allowed_tools, s.tools_locked
 		FROM agentd_sessions s
 		LEFT JOIN agentd_messages m ON m.session_id = s.id
 		WHERE (s.user_id = $2 OR s.user_id IS NULL)
@@ -212,7 +234,7 @@ func scanSessions(rows pgxRows) ([]Session, error) {
 		if err := rows.Scan(&s.ID, &s.UserID, &s.Persona, &s.Source, &s.Title,
 			&s.ProjectID, &s.ParentSessionID, &s.BranchPoint,
 			&s.CreatedAt, &s.LastActiveAt, &s.LastInputTokens, &s.TotalOutputTokens,
-			&s.Overrides); err != nil {
+			&s.Overrides, &s.AllowedTools, &s.ToolsLocked); err != nil {
 			return nil, fmt.Errorf("agentdb: scan session: %w", err)
 		}
 		out = append(out, s)
@@ -221,13 +243,14 @@ func scanSessions(rows pgxRows) ([]Session, error) {
 }
 
 // BranchSession creates a new session that is a child of parentID, forked at
-// branchPoint (the seq index of the last message to carry forward).
-func (d *DB) BranchSession(ctx context.Context, newID, parentID, userID, persona, source string, branchPoint int) error {
+// branchPoint (the seq index of the last message to carry forward). The branch
+// stores its own tool limits, normally the parent's.
+func (d *DB) BranchSession(ctx context.Context, newID, parentID, userID, persona, source string, branchPoint int, limits ToolLimits) error {
 	const q = `
-		INSERT INTO agentd_sessions (id, user_id, persona, source, parent_session_id, branch_point)
-		VALUES ($1, NULLIF($2,''), $3, $4, $5, $6)
+		INSERT INTO agentd_sessions (id, user_id, persona, source, parent_session_id, branch_point, allowed_tools, tools_locked)
+		VALUES ($1, NULLIF($2,''), $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (id) DO NOTHING`
-	if _, err := d.pool.Exec(ctx, q, newID, userID, persona, source, parentID, branchPoint); err != nil {
+	if _, err := d.pool.Exec(ctx, q, newID, userID, persona, source, parentID, branchPoint, limits.AllowedTools, limits.Locked); err != nil {
 		return fmt.Errorf("agentdb: branch session: %w", err)
 	}
 	return nil

@@ -13,10 +13,17 @@ import (
 )
 
 // persistedSession is the on-disk format for a saved session.
+//
+// UserID and the tool limits were added later: files without user_id load as
+// unowned (service-only). allowed_tools has no omitempty so a restricted
+// session is never written as unrestricted; null means no restriction.
 type persistedSession struct {
 	ID                string         `json:"id"`
 	Persona           string         `json:"persona"`
 	Source            string         `json:"source,omitempty"`
+	UserID            string         `json:"user_id,omitempty"`
+	AllowedTools      []string       `json:"allowed_tools"`
+	ToolsLocked       bool           `json:"tools_locked,omitempty"`
 	Messages          []chat.Message `json:"messages"` // non-system messages only
 	CreatedAt         time.Time      `json:"created_at"`
 	LastInputTokens   int            `json:"last_input_tokens"`
@@ -85,6 +92,9 @@ func saveSession(dir string, sess *Session) error {
 		ID:                sess.id,
 		Persona:           sess.persona,
 		Source:            sess.source,
+		UserID:            sess.userID,
+		AllowedTools:      sess.allowedTools,
+		ToolsLocked:       sess.toolsLocked,
 		CreatedAt:         sess.createdAt,
 		LastInputTokens:   sess.lastInputTokens,
 		TotalOutputTokens: sess.totalOutputTokens,

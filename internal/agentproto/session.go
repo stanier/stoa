@@ -81,3 +81,9 @@ type TokensResponse struct {
 	TotalMessages int           `json:"total_messages"`
 	ByRole       map[string]int `json:"by_role,omitempty"`
 }
+
+// LLMKeyHeader carries the per-user LLM key on the WebSocket connect to
+// /sessions/:id/ws. agentd does not store the key, so webd sends it again on
+// every connect; agentd attaches it to the session when the caller owns it.
+// This restores the key after an agentd restart.
+const LLMKeyHeader = "X-Stoa-LLM-Key"

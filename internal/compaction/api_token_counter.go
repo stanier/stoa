@@ -23,15 +23,15 @@ type AnthropicAPITokenCounter struct {
 
 // NewAnthropicAPITokenCounter creates a new Anthropic API token counter
 func NewAnthropicAPITokenCounter(cfg *config.Config) (*AnthropicAPITokenCounter, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config and API key required")
+	}
 	dp := cfg.LLM.DefaultProvider()
-	if cfg == nil || dp == nil || dp.APIKey == "" {
+	if dp == nil || dp.APIKey == "" {
 		return nil, fmt.Errorf("config and API key required")
 	}
 
-	fallback, err := NewTikTokenCounter(dp.Model)
-	if err != nil {
-		fallback = nil
-	}
+	fallback := NewBestEffortCounter(dp.Model)
 
 	apiURL := dp.APIURL
 	if apiURL == "" {
@@ -152,13 +152,12 @@ type OpenAIAPITokenCounter struct {
 // NewOpenAIAPITokenCounter creates a new OpenAI API token counter
 func NewOpenAIAPITokenCounter(cfg *config.Config) (*OpenAIAPITokenCounter, error) {
 	model := ""
-	if dp := cfg.LLM.DefaultProvider(); dp != nil {
-		model = dp.Model
+	if cfg != nil {
+		if dp := cfg.LLM.DefaultProvider(); dp != nil {
+			model = dp.Model
+		}
 	}
-	fallback, err := NewTikTokenCounter(model)
-	if err != nil {
-		fallback = nil
-	}
+	fallback := NewBestEffortCounter(model)
 
 	return &OpenAIAPITokenCounter{
 		fallback:  fallback,

@@ -7,6 +7,24 @@ import (
 	"github.com/pkoukk/tiktoken-go"
 )
 
+// NewBestEffortCounter returns a tiktoken counter for model when its encoding
+// can be loaded, and a CharEstimateCounter otherwise. tiktoken downloads its
+// BPE files on first use, so offline or egress-restricted hosts get the
+// estimate instead of an error. The result is never nil.
+//
+// It returns the interface type on purpose: storing a nil *TikTokenCounter in
+// a TokenCounter gives a non-nil interface that panics when called.
+func NewBestEffortCounter(model string) TokenCounter {
+	if tc, err := loadTikToken(model); err == nil && tc != nil {
+		return tc
+	}
+	return NewCharEstimateCounter()
+}
+
+// loadTikToken is NewTikTokenCounter; tests replace it to simulate a host
+// where the encoding can't be downloaded.
+var loadTikToken = NewTikTokenCounter
+
 // TikTokenCounter implements TokenCounter using tiktoken
 type TikTokenCounter struct {
 	encoding *tiktoken.Tiktoken

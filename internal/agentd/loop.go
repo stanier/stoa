@@ -101,6 +101,7 @@ func runAgenticLoop(
 			llmTools = sessionListTool(sess)
 		}
 		overrides := sess.overrides
+		llmKey := sess.llmKey // set again on reconnect; read under the lock
 		sess.mu.Unlock()
 
 		// Debug: dump message history shape so conversation confusion is diagnosable.
@@ -119,14 +120,14 @@ func runAgenticLoop(
 
 		// Inject the per-user stoa-infgw_* key so inference-gateway enforces user-scoped quotas.
 		// The key is provisioned by authd at login and passed in via SessionConfig.
-		if sess.llmKey != "" {
+		if llmKey != "" {
 			if overrides == nil {
 				overrides = &llm.Overrides{}
 			} else {
 				cp := *overrides
 				overrides = &cp
 			}
-			overrides.APIKey = &sess.llmKey
+			overrides.APIKey = &llmKey
 		}
 
 		// Attach per-session overrides so the LLM client picks them up.

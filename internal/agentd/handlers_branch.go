@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"github.com/stanier/stoa/internal/agentdb"
 	"github.com/stanier/stoa/internal/agentproto"
 	"github.com/stanier/stoa/internal/app"
 	"github.com/stanier/stoa/internal/chat"
@@ -72,15 +73,7 @@ func (s *Server) handleBranchSession(w http.ResponseWriter, r *http.Request, par
 	newSess := newSession(newID, persona, parentSource, parentUserID, parentLLMKey, parentAllowed)
 	newSess.toolsLocked = parentLocked
 	newSess.tracer = app.SetupTracer(s.cfg, newID)
-	newSess.llmCtx = app.BuildLLMContext(
-		s.cfg,
-		s.skillRegistry,
-		s.promptReg,
-		s.personaReg,
-		persona,
-		parentAllowed,
-		s.agentSkills...,
-	)
+	newSess.llmCtx = s.sessionLLMContext(r.Context(), persona, parentAllowed)
 	newSess.perSessionTools["list_tools"] = newListToolsTool(&newSess.mu, &newSess.llmCtx)
 
 	// New system prompt first, then replay non-system messages from parent.
@@ -104,7 +97,8 @@ func (s *Server) handleBranchSession(w http.ResponseWriter, r *http.Request, par
 
 	// Persist to DB if configured.
 	if s.agentDB != nil {
-		if err := s.agentDB.BranchSession(r.Context(), newID, parent.id, parentUserID, persona, parentSource, branchPoint); err != nil {
+		if err := s.agentDB.BranchSession(r.Context(), newID, parent.id, parentUserID, persona, parentSource, branchPoint,
+			agentdb.ToolLimits{AllowedTools: parentAllowed, Locked: parentLocked}); err != nil {
 			logging.Warnf("agentd: db: branch session %s → %s: %v", parent.id, newID, err)
 		}
 		s.persistSession(newSess)

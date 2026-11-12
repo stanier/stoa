@@ -33,6 +33,7 @@ See `CONTRIBUTING.md` for the full developer guide: build commands, provider con
 - `WS /sessions/:id/ws` → bidirectional JSON frames
   - Client sends: `{ "type": "send_message", "send_message": { "content": "..." } }`
   - Client sends: `{ "type": "perm_response", "perm_response": { "request_id": "...", "approved": true } }`
+  - webd sends the user's LLM key in the `X-Stoa-LLM-Key` header on connect. agentd never stores the key, so this is how a session gets it back after a restart; it is only accepted from the session's owner.
 
 **agentproto `SessionConfig.Source`**: Set to `"web"`, `"tui"`, `"zulip"`, `"slack"`, `"discord"`, `"matrix"`, or `"cli"` when creating sessions. Stored on the session and returned in `SessionInfo`. webd filters the sidebar to `source == "web"`.
 

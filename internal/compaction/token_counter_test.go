@@ -7,10 +7,7 @@ import (
 )
 
 func TestTikTokenCounter_Count(t *testing.T) {
-	counter, err := NewTikTokenCounter("gpt-4o")
-	if err != nil {
-		t.Fatalf("Failed to create token counter: %v", err)
-	}
+	counter := newTikTokenOrSkip(t, "gpt-4o")
 
 	tests := []struct {
 		name string
@@ -54,10 +51,7 @@ func TestTikTokenCounter_Count(t *testing.T) {
 }
 
 func TestTikTokenCounter_CountMessages(t *testing.T) {
-	counter, err := NewTikTokenCounter("gpt-4o")
-	if err != nil {
-		t.Fatalf("Failed to create token counter: %v", err)
-	}
+	counter := newTikTokenOrSkip(t, "gpt-4o")
 
 	messages := []chat.Message{
 		chat.NewUserMessage("Hello"),
@@ -79,4 +73,15 @@ func TestTikTokenCounter_CountMessages(t *testing.T) {
 	if count < 12 {
 		t.Errorf("CountMessages() = %d, want at least 12 (3 messages * 4 overhead)", count)
 	}
+}
+
+// newTikTokenOrSkip skips the test when tiktoken can't load its encoding,
+// which it downloads at runtime (offline or egress-restricted hosts).
+func newTikTokenOrSkip(t *testing.T, model string) *TikTokenCounter {
+	t.Helper()
+	counter, err := NewTikTokenCounter(model)
+	if err != nil {
+		t.Skipf("tiktoken encoding unavailable on this host: %v", err)
+	}
+	return counter
 }
