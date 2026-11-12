@@ -19,8 +19,90 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Vet
+        run: go vet ./...
+
       - name: Run tests
         run: make test
+
+  race:
+    name: Race
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests with the race detector
+        run: go test -race ./...
+        env:
+          CGO_ENABLED: "1"
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # only-new-issues compares against the base commit.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.5.0
+          # The existing code has a lint backlog (see .golangci.yml); only
+          # issues a change introduces fail the check.
+          only-new-issues: true
+
+  vulncheck:
+    name: Vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-file: go.mod
+          go-package: ./...
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: web
+
+      - name: Run tests
+        run: npm test
+        working-directory: web
+
+      - name: Audit dependencies
+        # Low-severity advisories with no fix (deepmerge via the Svelte
+        # Vite plugin) don't fail the build; high and critical do.
+        run: npm audit --audit-level=high
+        working-directory: web
 
   build:
     name: Build

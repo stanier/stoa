@@ -1,0 +1,17 @@
+version: "2"
+
+run:
+  timeout: 10m
+
+linters:
+  # The standard set: errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  exclusions:
+    # Skip well-known noise such as unchecked Close/Flush/os.Setenv errors.
+    presets:
+      - std-error-handling
+      - common-false-positives
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
