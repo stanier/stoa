@@ -7,6 +7,7 @@ Welcome to the Stoa documentation repository. This directory contains guides and
 - [SETUP.md](SETUP.md) - Getting started (standalone, agentd, containerized)
 - [PERMISSIONS.md](PERMISSIONS.md) - MCP tool permission system
 - [SAMPLING_PARAMS.md](SAMPLING_PARAMS.md) - LLM sampling hyperparameter reference
+- [VOICE_AND_DECISION_MODELS.md](VOICE_AND_DECISION_MODELS.md) - Realtime voice (omni) and decision (d1) models
 - [ZULIP_SERVER.md](ZULIP_SERVER.md) - Zulip bridge setup
 
 ## Technical Reference

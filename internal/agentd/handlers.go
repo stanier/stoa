@@ -926,18 +926,25 @@ func (s *Server) handleGetModels(w http.ResponseWriter, r *http.Request) {
 	type providerInfo struct {
 		Name   string   `json:"name"`
 		Models []string `json:"models"`
+		// Capabilities maps model ID → non-chat capabilities ("voice",
+		// "decision"); models with none are left out.
+		Capabilities map[string][]string `json:"capabilities,omitempty"`
 	}
 
 	var providers []providerInfo
 	if s.providerRegistry != nil {
 		for _, name := range s.providerRegistry.ProviderNames() {
 			var models []string
+			caps := map[string][]string{}
 			for _, m := range s.providerRegistry.ListAllModels() {
 				if m.Provider == name {
 					models = append(models, m.ID)
+					if len(m.Capabilities) > 0 {
+						caps[m.ID] = m.Capabilities
+					}
 				}
 			}
-			providers = append(providers, providerInfo{Name: name, Models: models})
+			providers = append(providers, providerInfo{Name: name, Models: models, Capabilities: caps})
 		}
 	}
 	if providers == nil {
