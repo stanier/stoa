@@ -168,3 +168,87 @@ test('graphs save to and load from storage, and bad data is ignored', () => {
   assert.deepEqual(loadGraphs(storage), [])
   assert.equal(saveGraphs({ setItem() { throw new Error('full') } }, [g]), false)
 })
+
+// ── Where graphs are saved ───────────────────────────────────────────────────
+import { serverStore, localStore, moveLocalToServer, toServerBody, fromServer } from './decision/store.js'
+
+function memStorage(init = {}) {
+  const m = new Map(Object.entries(init))
+  return { getItem: k => m.get(k) ?? null, setItem: (k, v) => m.set(k, v), removeItem: k => m.delete(k), m }
+}
+
+// A fake agentd /decision-graphs for one user.
+function fakeServer({ failCreates = 0 } = {}) {
+  const rows = new Map()
+  let n = 0
+  const calls = []
+  const fetchFn = async (url, init = {}) => {
+    const method = init.method ?? 'GET'
+    calls.push(`${method} ${url}`)
+    const json = (o, status = 200) => new Response(o == null ? null : JSON.stringify(o), { status })
+    const id = decodeURIComponent(url.split('/')[3] ?? '')
+    if (method === 'GET' && !id) return json([...rows.values()].map(({ graph, ...r }) => r))
+    if (method === 'POST') {
+      if (failCreates-- > 0) return new Response('boom', { status: 500 })
+      const b = JSON.parse(init.body)
+      const row = { id: `dg_${++n}`, name: b.name, graph: b.graph, updated_at: new Date(1e12 + n).toISOString() }
+      rows.set(row.id, row)
+      return json(row, 201)
+    }
+    if (!rows.has(id)) return new Response('decision graph not found', { status: 404 })
+    if (method === 'GET') return json(rows.get(id))
+    if (method === 'PUT') {
+      const b = JSON.parse(init.body)
+      rows.set(id, { ...rows.get(id), name: b.name, graph: b.graph })
+      return json(rows.get(id))
+    }
+    if (method === 'DELETE') { rows.delete(id); return new Response(null, { status: 204 }) }
+  }
+  return { fetchFn, rows, calls }
+}
+
+test('server body keeps the editor document and a name', () => {
+  const g = exampleGraph()
+  const body = toServerBody({ ...g, name: '  ' })
+  assert.equal(body.name, 'Untitled graph')
+  assert.deepEqual(Object.keys(body.graph), ['root', 'nodes'])
+  const back = fromServer({ id: 'dg_1', name: 'x', graph: body.graph, updated_at: '2026-11-12T00:00:00Z' })
+  assert.equal(back.id, 'dg_1')
+  assert.deepEqual(back.nodes, g.nodes)
+  assert.deepEqual(toApiGraph(back), toApiGraph(g))
+})
+
+test('serverStore creates, saves, lists and removes', async () => {
+  const srv = fakeServer()
+  const store = serverStore(srv.fetchFn)
+  const g = await store.create(exampleGraph())
+  assert.equal(g.id, 'dg_1')
+  g.name = 'Renamed'
+  await store.save(g)
+  assert.deepEqual((await store.list()).map(x => x.name), ['Renamed'])
+  assert.equal((await store.get('dg_1')).nodes.length, 3)
+  await store.remove('dg_1')
+  await assert.rejects(store.get('dg_1'), e => e.status === 404 && /not found/.test(e.message))
+})
+
+test('browser graphs move to the server once, and failures stay local', async () => {
+  const storage = memStorage()
+  saveGraphs(storage, [exampleGraph(), blankGraph('Second')])
+  const srv = fakeServer({ failCreates: 1 })
+  const first = await moveLocalToServer(storage, serverStore(srv.fetchFn))
+  assert.deepEqual(first, { moved: 1, left: 1 })
+  assert.equal(loadGraphs(storage).length, 1)
+  const second = await moveLocalToServer(storage, serverStore(srv.fetchFn))
+  assert.deepEqual(second, { moved: 1, left: 0 })
+  assert.equal(storage.getItem(STORAGE_KEY), null)
+  assert.equal(srv.rows.size, 2)
+})
+
+test('localStore keeps graphs in the browser', async () => {
+  const store = localStore(memStorage())
+  const g = await store.create(exampleGraph())
+  await store.save({ ...g, name: 'Local' })
+  assert.deepEqual((await store.list()).map(x => x.name), ['Local'])
+  await store.remove(g.id)
+  assert.deepEqual(await store.list(), [])
+})

@@ -134,10 +134,19 @@ the answer's outcome picks the edge to the next node (yes/no keys are
   **Step** or **Run to the end**. The path lists each answer with its
   probabilities; when the model is unsure the run pauses and you pick the
   branch, and you can take a different branch at the latest step any time.
-- **Stubbed:** graphs are saved in the browser (localStorage), not on the
-  server, so they don't follow you across browsers. No loops, no images in
-  the state, no export/import, and no "auto" rules beyond the confidence floor
-  yet.
+- **Saving:** graphs are saved per user in agentd's database
+  (`agentd_decision_graphs`, migration 00014) through `/decision-graphs`
+  (`GET` list, `POST` create, `GET`/`PUT`/`DELETE /decision-graphs/:id`;
+  webd: `/api/decision-graphs`). Ownership comes from the auth context, not
+  the session, so it survives restarts; other users get 404, service accounts
+  see all. The stored `graph` is the editor's document (`{root, nodes}`), at
+  most 256 KiB, 500 graphs per user. Graphs that were in the browser's
+  localStorage move to the server on first load. When agentd has no database,
+  the screen falls back to localStorage and says so.
+- **Stubbed:** no loops, no images in the state, no export/import, and no
+  "auto" rules beyond the confidence floor yet. Agents can't run saved graphs
+  yet: the stored document is the editor's form, which `toApiGraph` in
+  `web/src/lib/decision/graph.js` turns into a `decision.Graph`.
 
 Liquid documents no chaining API; trees are always client-side calls.
 

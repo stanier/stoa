@@ -6,7 +6,9 @@
   // pauses so you can pick the branch yourself, and you can take a
   // different branch at the latest step any time.
   //
-  // Graphs are kept in this browser's localStorage for now.
+  // Graphs are saved on the server, per user (agentd /decision-graphs).
+  // When agentd has no database they're kept in this browser instead, and
+  // graphs saved in the browser before are moved to the server on first load.
   import { onMount } from 'svelte'
   import PageLayout from './PageLayout.svelte'
   import DecisionResult from './DecisionResult.svelte'
@@ -14,13 +16,15 @@
   import { QUESTION_TYPES, rowOutcomes, summarize, pct, toApiState } from './decision/form.js'
   import {
     MAX_NODES, blankGraph, blankNode, exampleGraph, nodeTitle, removeNode, toApiGraph,
-    layout, newRun, applyTrace, overrideLast, stepOutcome, loadGraphs, saveGraphs,
+    layout, newRun, applyTrace, overrideLast, stepOutcome,
   } from './decision/graph.js'
+  import { serverStore, localStore, moveLocalToServer } from './decision/store.js'
 
   let { onBack } = $props()
 
-  let graphs    = $state([])
-  let activeId  = $state(null)
+  let store     = null         // serverStore or localStore
+  let graphs    = $state([])   // summaries: [{ id, name, updatedAt }]
+  let active    = $state(null) // the open graph, in full
   let models    = $state([])   // [{ provider, model }]
   let modelKey  = $state('')
   let modelsLoaded = $state(false)
@@ -28,9 +32,12 @@
   let run       = $state(null)
   let busy      = $state(false)
   let error     = $state(null)
-  let ready     = $state(false)
+  let loadError = $state(null)
+  let notice    = $state(null)
+  let saveState = $state('')   // '' | 'saving' | 'saved' | 'error'
+  let storeKind = $state('server')
 
-  let active = $derived(graphs.find(g => g.id === activeId) ?? null)
+  let activeId = $derived(active?.id ?? null)
   let picked = $derived(models.find(m => key(m) === modelKey) ?? null)
   // Waiting for a person to pick the branch at a low-confidence step.
   let paused = $derived(run?.done === 'low_confidence')
@@ -38,18 +45,73 @@
   const key = m => `${m.provider}\u0000${m.model}`
 
   onMount(() => {
-    const saved = loadGraphs(globalThis.localStorage)
-    graphs = saved.length ? saved : [exampleGraph()]
-    activeId = graphs[0].id
-    ready = true
+    loadGraphList()
     loadModels()
+    return () => { flushSave() }
   })
 
-  // Save on every edit once loaded.
+  async function loadGraphList() {
+    const storage = globalThis.localStorage
+    try {
+      store = serverStore(apiFetch)
+      try {
+        await store.list()
+      } catch (e) {
+        if (e.status !== 503) throw e
+        store = localStore(storage)
+        storeKind = 'local'
+        notice = 'The server has no database, so graphs are saved in this browser only.'
+      }
+      if (store.kind === 'server') {
+        const { moved, left } = await moveLocalToServer(storage, store)
+        if (moved) notice = `Moved ${moved} graph${moved === 1 ? '' : 's'} from this browser to the server.`
+        if (left) notice = `${left} graph${left === 1 ? '' : 's'} from this browser couldn't be moved to the server yet; they stay in this browser until next time.`
+      }
+      graphs = await store.list()
+      if (!graphs.length) {
+        const g = await store.create(exampleGraph())
+        graphs = [{ id: g.id, name: g.name, updatedAt: g.updatedAt }]
+      }
+      await selectGraph(graphs[0].id)
+    } catch (e) {
+      loadError = `Couldn't load your graphs: ${e.message}`
+    }
+  }
+
+  // ── Saving ─────────────────────────────────────────────────────────────────
+  // Every edit to the open graph is saved after a short pause.
+  let saveTimer = null
+  let lastSaved = ''
+
   $effect(() => {
-    const snapshot = $state.snapshot(graphs)
-    if (ready) saveGraphs(globalThis.localStorage, snapshot)
+    if (!active) return
+    const snap = $state.snapshot(active)
+    const json = JSON.stringify(snap)
+    if (json === lastSaved) return
+    clearTimeout(saveTimer)
+    saveState = 'saving'
+    saveTimer = setTimeout(() => save(snap, json), 700)
   })
+
+  async function save(snap, json) {
+    saveTimer = null
+    try {
+      const out = await store.save(snap)
+      lastSaved = json
+      graphs = graphs.map(g => (g.id === out.id ? { ...g, name: out.name, updatedAt: out.updatedAt } : g))
+      if (active?.id === snap.id && JSON.stringify($state.snapshot(active)) === json) saveState = 'saved'
+    } catch (e) {
+      saveState = 'error'
+      error = `Couldn't save: ${e.message}`
+    }
+  }
+
+  async function flushSave() {
+    if (!saveTimer || !active) return
+    clearTimeout(saveTimer)
+    const snap = $state.snapshot(active)
+    await save(snap, JSON.stringify(snap))
+  }
 
   async function loadModels() {
     try {
@@ -70,24 +132,53 @@
   }
 
   // ── Editing ────────────────────────────────────────────────────────────────
-  function newGraph() {
-    const g = blankGraph(`Graph ${graphs.length + 1}`)
-    graphs = [...graphs, g]
-    selectGraph(g.id)
+  async function newGraph() {
+    try {
+      await flushSave()
+      const g = await store.create(blankGraph(`Graph ${graphs.length + 1}`))
+      graphs = [{ id: g.id, name: g.name, updatedAt: g.updatedAt }, ...graphs]
+      openGraph(g)
+    } catch (e) {
+      error = `Couldn't create a graph: ${e.message}`
+    }
   }
 
-  function selectGraph(id) {
-    activeId = id
+  function openGraph(g) {
+    lastSaved = JSON.stringify(g)
+    active = g
+    saveState = ''
     run = null
     error = null
   }
 
-  function deleteGraph() {
+  async function selectGraph(id) {
+    if (id === activeId) return
+    try {
+      await flushSave()
+      openGraph(await store.get(id))
+    } catch (e) {
+      error = `Couldn't open that graph: ${e.message}`
+    }
+  }
+
+  async function deleteGraph() {
     if (!active) return
     if (!confirm(`Delete "${active.name}"?`)) return
-    graphs = graphs.filter(g => g.id !== active.id)
-    if (!graphs.length) graphs = [blankGraph()]
-    selectGraph(graphs[0].id)
+    const id = active.id
+    try {
+      clearTimeout(saveTimer)
+      saveTimer = null
+      await store.remove(id)
+      graphs = graphs.filter(g => g.id !== id)
+      active = null
+      if (!graphs.length) {
+        const g = await store.create(blankGraph())
+        graphs = [{ id: g.id, name: g.name, updatedAt: g.updatedAt }]
+      }
+      await selectGraph(graphs[0].id)
+    } catch (e) {
+      error = `Couldn't delete: ${e.message}`
+    }
   }
 
   function addNode() {
@@ -99,8 +190,7 @@
   }
 
   function deleteNode(id) {
-    const i = graphs.findIndex(g => g.id === activeId)
-    graphs[i] = removeNode($state.snapshot(graphs[i]), id)
+    active = removeNode($state.snapshot(active), id)
     if (run && (run.current === id || run.steps.some(s => s.node === id))) run = null
   }
 
@@ -210,7 +300,8 @@
 </script>
 
 <PageLayout title="Decision graphs" {onBack}
-  hint="Chain questions for a decision model: each answer picks the next step. Graphs are saved in this browser."
+  hint="Chain questions for a decision model: each answer picks the next step."
+  error={loadError}
   actionLabel="New graph" onAction={newGraph}>
 
   {#if active}
@@ -219,8 +310,12 @@
         {#each graphs as g (g.id)}<option value={g.id}>{g.name || 'Untitled graph'}</option>{/each}
       </select>
       <input class="name" bind:value={active.name} placeholder="Graph name" />
+      <span class="save-state" class:bad={saveState === 'error'}>
+        {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? (storeKind === 'local' ? 'Saved in this browser' : 'Saved') : saveState === 'error' ? 'Not saved' : ''}
+      </span>
       <button class="ghost danger" onclick={deleteGraph}>Delete graph</button>
     </div>
+    {#if notice}<div class="notice top">{notice} <button class="ghost" onclick={() => notice = null}>Dismiss</button></div>{/if}
 
     <div class="layout">
       <!-- ── Steps editor ─────────────────────────────────────────────── -->
@@ -377,6 +472,9 @@
 <style>
   .toolbar { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
   .toolbar .name { flex: 1; min-width: 10rem; max-width: 24rem; }
+  .save-state { font-size: 0.75rem; color: var(--text4); min-width: 6rem; }
+  .save-state.bad { color: var(--danger-light); }
+  .notice.top { margin-bottom: 1rem; }
 
   .layout { display: flex; gap: 1.5rem; align-items: flex-start; flex-wrap: wrap; }
   .steps { flex: 1 1 380px; min-width: 0; display: flex; flex-direction: column; gap: 0.6rem; }
