@@ -29,7 +29,7 @@ func NewDefaultChecker(manager Manager, defaultRank PermissionRank) *DefaultChec
 // Check performs a permission check for a tool execution
 func (c *DefaultChecker) Check(ctx context.Context, toolName, serverName string, params map[string]interface{}) (*PermissionDecision, error) {
 	// 1. Check runtime grants first (user said "always allow" or "allow for session")
-	if grant := c.getGrant(toolName, serverName); grant != nil {
+	if grant := c.getGrant(toolName, serverName, SessionIDFromContext(ctx)); grant != nil {
 		return &PermissionDecision{
 			Allowed:        true,
 			Rank:           RankSilent, // Already approved, treat as silent
@@ -87,7 +87,7 @@ func (c *DefaultChecker) GrantPermission(grant PermissionGrant) {
 	key := c.grantKey(grant.ToolPattern, grant.ServerName)
 
 	if grant.Scope == "session" {
-		c.sessionGrants[key] = &grant
+		c.sessionGrants[grant.SessionID+"\x00"+key] = &grant
 	} else {
 		c.grants[key] = &grant
 	}
@@ -119,8 +119,9 @@ func (c *DefaultChecker) ClearSessionGrants() {
 	c.sessionGrants = make(map[string]*PermissionGrant)
 }
 
-// getGrant checks if there's a grant matching the tool
-func (c *DefaultChecker) getGrant(toolName, serverName string) *PermissionGrant {
+// getGrant checks if there's a grant matching the tool. Session-scoped grants
+// only match when they were granted in the same session (sessionID).
+func (c *DefaultChecker) getGrant(toolName, serverName, sessionID string) *PermissionGrant {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -130,7 +131,9 @@ func (c *DefaultChecker) getGrant(toolName, serverName string) *PermissionGrant 
 		allGrants[k] = v
 	}
 	for k, v := range c.sessionGrants {
-		allGrants[k] = v
+		if v.SessionID == sessionID {
+			allGrants["session\x00"+k] = v
+		}
 	}
 
 	// Find matching grant (with server specificity)

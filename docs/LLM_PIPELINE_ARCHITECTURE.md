@@ -303,7 +303,7 @@ sequenceDiagram
     User->>webd: GET /auth/login
     webd->>authd: POST /oauth/login
     authd-->>webd: {login_id, redirect_url}
-    webd-->>User: 302 → local-idp /authorize
+    webd-->>User: 302 → local-idp /authorize (sets __login_id cookie)
 
     User->>localidp: GET /authorize (OIDC)
     localidp-->>User: Login form
@@ -315,12 +315,15 @@ sequenceDiagram
     authd->>localidp: POST /token (exchange code)
     localidp-->>authd: ID token (signed JWT)
     Note over authd: Verify signature via JWKS, issue session token, store in authdb
-    authd-->>User: 302 → webd /?token=<session-token>
+    authd-->>User: 302 → webd /auth/callback?login_id=...&code=...
 
-    User->>webd: GET /?token=<session-token>
+    User->>webd: GET /auth/callback?login_id=...&code=...
+    Note over webd: login_id must match the __login_id cookie
+    webd->>authd: POST /oauth/login/exchange {login_id, code}
+    authd-->>webd: {session_token, llm_key}
     webd->>authd: POST /token/verify (Bearer)
     authd-->>webd: {user_id, email}
-    Note over webd: Set HttpOnly SameSite cookie; clear token from URL
+    Note over webd: Set HttpOnly SameSite cookie
     webd-->>User: 200 Svelte SPA (cookie set)
 ```
 

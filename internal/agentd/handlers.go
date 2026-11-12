@@ -35,8 +35,19 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The session's owner comes from the authenticated caller, not the request
+	// body. Only service accounts (bridges acting for a user) may name the owner.
+	if callerID, ok := UserIDFromContext(r.Context()); ok && !IsServiceFromContext(r.Context()) {
+		if req.UserID != "" && req.UserID != callerID {
+			http.Error(w, "forbidden: user_id does not match the authenticated user", http.StatusForbidden)
+			return
+		}
+		req.UserID = callerID
+	}
+
 	sessionID := uuid.New().String()
 	sess := newSession(sessionID, req.Persona, req.Source, req.UserID, req.LLMKey, req.AllowedTools)
+	sess.toolsLocked = len(req.AllowedTools) > 0 && IsServiceFromContext(r.Context())
 	sess.tracer = app.SetupTracer(s.cfg, sessionID)
 
 	// Build the initial LLM context (system prompt + tools).
@@ -128,13 +139,31 @@ func (s *Server) handleClearSession(w http.ResponseWriter, r *http.Request, sess
 // handleDeleteSession handles DELETE /sessions/:id.
 // Removes the session from memory and, if configured, from the database.
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, sessionID string) {
-	// Ownership check before deletion.
-	if !IsServiceFromContext(r.Context()) {
-		requesterID, _ := UserIDFromContext(r.Context())
-		s.mu.RLock()
-		sess, exists := s.sessions[sessionID]
-		s.mu.RUnlock()
-		if exists && sess.userID != "" && requesterID != "" && sess.userID != requesterID {
+	// Ownership check before deletion, whether the session is in memory or
+	// only in the database (evicted or not yet recovered).
+	s.mu.RLock()
+	sess, exists := s.sessions[sessionID]
+	s.mu.RUnlock()
+	if exists {
+		sess.mu.Lock()
+		owner := sess.userID
+		sess.mu.Unlock()
+		if !callerMayAccess(r.Context(), owner) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	} else if s.agentDB != nil {
+		ds, err := s.agentDB.GetSession(r.Context(), sessionID)
+		if err != nil {
+			logging.Errorf("agentd: db: get session %s for delete: %v", sessionID, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if ds == nil {
+			http.Error(w, "session not found", http.StatusNotFound)
+			return
+		}
+		if !callerMayAccess(r.Context(), ds.UserID) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -236,8 +265,8 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	sessions := make([]*Session, 0, len(s.sessions))
 	for _, sess := range s.sessions {
-		// Exclude sessions explicitly owned by a different user.
-		if !isService && requesterID != "" && sess.userID != "" && sess.userID != requesterID {
+		// Only list sessions the caller may open.
+		if !callerMayAccess(r.Context(), sess.userID) {
 			continue
 		}
 		sessions = append(sessions, sess)
@@ -676,19 +705,16 @@ func (s *Server) serveWebSocket(ws *websocket.Conn, sess *Session, token string)
 		}
 	}()
 
-	// permForwarder: drains the global permission channels and forwards events to
-	// this session's client. MCP tools are registered globally (shared skillRegistry)
-	// and therefore send permission requests to s.permsSetup.RequestChan, not to
-	// per-session channels. Reading the global channels here is correct for the
-	// current single-session-per-connection model.
-	//
-	// TODO: for true multi-session concurrency, introduce per-session channel
-	// wrapping so requests can be routed to the correct WS connection.
+	// permForwarder: receives this session's permission requests and mentions
+	// from s.permRouter (which reads the global MCP permission channels and
+	// routes by session ID) and forwards them to this client.
 	var permReqChan <-chan *permissions.PermissionRequest
 	var permMentionChan <-chan *permissions.PermissionMention
-	if s.permsSetup != nil {
-		permReqChan = s.permsSetup.RequestChan
-		permMentionChan = s.permsSetup.MentionChan
+	if s.permRouter != nil {
+		sub, unsubscribe := s.permRouter.subscribe(sess.id)
+		defer unsubscribe()
+		permReqChan = sub.reqs
+		permMentionChan = sub.mentions
 	}
 
 	go func() {
@@ -1045,6 +1071,14 @@ func (s *Server) handleSessionTools(w http.ResponseWriter, r *http.Request, sess
 		})
 
 	case http.MethodPatch:
+		sess.mu.Lock()
+		locked := sess.toolsLocked
+		sess.mu.Unlock()
+		if locked && !IsServiceFromContext(r.Context()) {
+			http.Error(w, "forbidden: tool restrictions for this session were set by a service account", http.StatusForbidden)
+			return
+		}
+
 		var patch struct {
 			AllowedTools []string `json:"allowed_tools"`
 		}

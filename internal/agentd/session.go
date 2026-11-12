@@ -104,6 +104,11 @@ type Session struct {
 	// Nil means the persona's full tool set; non-nil is an additional glob filter.
 	allowedTools []string
 
+	// toolsLocked is set when a service account (e.g. a chat bridge applying
+	// role-based restrictions) created the session with an allowed_tools list.
+	// The session owner may not then replace the list via PATCH /sessions/:id/tools.
+	toolsLocked bool
+
 	// tracer logs conversation events to a per-session JSONL file.
 	tracer *trace.Tracer
 

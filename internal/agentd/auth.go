@@ -36,6 +36,25 @@ func IsServiceFromContext(ctx context.Context) bool {
 	return v
 }
 
+// callerMayAccess reports whether the request's caller may access a resource
+// owned by ownerID.
+//
+//   - Service accounts may access everything.
+//   - With authentication disabled (AGENTD_NO_AUTH, no user in context)
+//     everything is accessible, as before.
+//   - Otherwise the caller must be the owner. Unowned resources (ownerID == "")
+//     are service-only: an empty owner must never mean "anyone".
+func callerMayAccess(ctx context.Context, ownerID string) bool {
+	if IsServiceFromContext(ctx) {
+		return true
+	}
+	requesterID, ok := UserIDFromContext(ctx)
+	if !ok {
+		return true
+	}
+	return ownerID != "" && ownerID == requesterID
+}
+
 // AuthMiddlewareWithAPIKeyd wraps the handler with authentication enforcement.
 //
 // When authdClient is non-nil (production), all requests are validated against
