@@ -43,6 +43,12 @@ func NewServer(rootDir, name, version string) (*Server, error) {
 		return nil, fmt.Errorf("root path is not a directory: %s", absRoot)
 	}
 
+	// Resolve symlinks in the root itself so containment checks compare
+	// resolved paths with a resolved root (e.g. /tmp -> /private/tmp).
+	if resolved, err := filepath.EvalSymlinks(absRoot); err == nil {
+		absRoot = resolved
+	}
+
 	s := &Server{
 		BaseServer: mcpserver.BaseServer{Name: name, Version: version},
 		rootDir:    absRoot,
@@ -201,20 +207,47 @@ func (s *Server) validatePath(relPath string) (string, error) {
 	}
 
 	// Resolve symlinks and re-validate to prevent symlink escape attacks.
-	// EvalSymlinks returns an error if the path doesn't exist yet (e.g. for
-	// writes to new files), so only apply it when the path already exists.
-	if _, err := os.Lstat(absPath); err == nil {
-		resolved, err := filepath.EvalSymlinks(absPath)
-		if err != nil {
-			return "", fmt.Errorf("failed to resolve path %s: %w", relPath, err)
-		}
-		if resolved != s.rootDir && !strings.HasPrefix(resolved, rootWithSep) {
-			return "", fmt.Errorf("path escapes root directory via symlink: %s", relPath)
-		}
-		absPath = resolved
+	// The path may not exist yet (a write to a new file), so resolve its
+	// deepest existing ancestor: otherwise "link/new.txt", with link pointing
+	// outside the root, would be written outside the root.
+	resolved, err := resolveExisting(absPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve path %s: %w", relPath, err)
 	}
+	if resolved != s.rootDir && !strings.HasPrefix(resolved, rootWithSep) {
+		return "", fmt.Errorf("path escapes root directory via symlink: %s", relPath)
+	}
+	absPath = resolved
 
 	return absPath, nil
+}
+
+// resolveExisting evaluates symlinks in the longest existing prefix of path
+// and appends the rest unchanged. A dangling symlink is an error, since
+// writing through it would create its target wherever it points.
+func resolveExisting(path string) (string, error) {
+	var rest []string
+	cur := path
+	for {
+		if _, err := os.Lstat(cur); err == nil {
+			resolved, err := filepath.EvalSymlinks(cur)
+			if err != nil {
+				return "", err
+			}
+			for i := len(rest) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, rest[i])
+			}
+			return resolved, nil
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return path, nil
+		}
+		rest = append(rest, filepath.Base(cur))
+		cur = parent
+	}
 }
 
 // handleReadFile reads a file
@@ -627,6 +660,14 @@ func (s *Server) handleSearchContent(ctx context.Context, arguments map[string]i
 		if filePattern != "" {
 			matched, err := filepath.Match(filePattern, filepath.Base(path))
 			if err != nil || !matched {
+				return nil
+			}
+		}
+
+		// WalkDir doesn't follow symlinks, but ReadFile does: a link to a
+		// file outside the root must not be read.
+		if d.Type()&fs.ModeSymlink != 0 {
+			if _, err := s.validatePath(path); err != nil {
 				return nil
 			}
 		}

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/stanier/stoa/internal/mcpserver"
+	"github.com/stanier/stoa/internal/netguard"
 )
 
 const (
@@ -450,8 +450,8 @@ func prettyJSON(data json.RawMessage) string {
 // environment.  When HTTP_PROXY or HTTPS_PROXY is set the container is behind
 // an egress proxy (squid) that enforces its own allowlist; in that case we use
 // http.ProxyFromEnvironment and the standard dialer so the proxy can be reached
-// (the proxy's IP is on a Docker bridge — safeDialContext would block it).
-// Without a proxy we install safeDialContext for in-process SSRF protection.
+// (the proxy's IP is on a Docker bridge — netguard would block it).
+// Without a proxy we install netguard for in-process SSRF protection.
 func buildTransport() *http.Transport {
 	if proxyURL := proxyFromEnv(); proxyURL != nil {
 		return &http.Transport{
@@ -459,7 +459,7 @@ func buildTransport() *http.Transport {
 		}
 	}
 	return &http.Transport{
-		DialContext: safeDialContext,
+		DialContext: (&netguard.Dialer{}).DialContext,
 	}
 }
 
@@ -476,45 +476,7 @@ func proxyFromEnv() *url.URL {
 	return nil
 }
 
-// safeDialContext resolves the hostname and rejects private/loopback IPs.
-func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
-	}
-	ips, err := net.DefaultResolver.LookupHost(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	for _, ipStr := range ips {
-		ip := net.ParseIP(ipStr)
-		if ip != nil && isPrivateIP(ip) {
-			return nil, fmt.Errorf("access to private IP %s is not allowed", ip)
-		}
-	}
-	d := &net.Dialer{}
-	return d.DialContext(ctx, network, net.JoinHostPort(ips[0], port))
-}
 
-func isPrivateIP(ip net.IP) bool {
-	privateBlocks := []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"127.0.0.0/8",
-		"169.254.0.0/16",
-		"::1/128",
-		"fc00::/7",
-		"fe80::/10",
-	}
-	for _, cidr := range privateBlocks {
-		_, network, _ := net.ParseCIDR(cidr)
-		if network != nil && network.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
 
 // --- result helpers ---
 

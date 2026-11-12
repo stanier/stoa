@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/stanier/stoa/internal/agentproto"
 	"github.com/stanier/stoa/internal/mcpserver"
+	"github.com/stanier/stoa/internal/netguard"
 )
 
 const (
@@ -50,7 +50,7 @@ func NewServer(name, version string, cfg Config) *Server {
 
 	// Clone DefaultTransport and override dial for SSRF protection.
 	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.DialContext = s.safeDialContext
+	t.DialContext = (&netguard.Dialer{}).DialContext
 	s.client = &http.Client{
 		Timeout:   time.Duration(cfg.TimeoutSecs) * time.Second,
 		Transport: t,
@@ -62,36 +62,6 @@ func NewServer(name, version string, cfg Config) *Server {
 	return s
 }
 
-// safeDialContext blocks requests to localhost and private IPs.
-func (s *Server) safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
-	}
-	switch strings.ToLower(host) {
-	case "localhost", "ip6-localhost", "ip6-loopback":
-		return nil, fmt.Errorf("access to %q is not allowed", host)
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if isPrivateIP(ip) {
-			return nil, fmt.Errorf("access to private IP %s is not allowed", ip)
-		}
-		d := &net.Dialer{}
-		return d.DialContext(ctx, network, net.JoinHostPort(host, port))
-	}
-	ips, err := net.DefaultResolver.LookupHost(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	for _, ipStr := range ips {
-		ip := net.ParseIP(ipStr)
-		if ip != nil && isPrivateIP(ip) {
-			return nil, fmt.Errorf("access to private IP %s is not allowed", ip)
-		}
-	}
-	d := &net.Dialer{}
-	return d.DialContext(ctx, network, net.JoinHostPort(ips[0], port))
-}
 
 func (s *Server) ListTools(_ context.Context) ([]mcpserver.Tool, error) {
 	return []mcpserver.Tool{
@@ -512,23 +482,3 @@ func extractContent(output []agentproto.ACPMessage) string {
 	return sb.String()
 }
 
-// isPrivateIP reports whether ip is in a private or loopback range.
-func isPrivateIP(ip net.IP) bool {
-	privateBlocks := []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"127.0.0.0/8",
-		"169.254.0.0/16",
-		"::1/128",
-		"fc00::/7",
-		"fe80::/10",
-	}
-	for _, cidr := range privateBlocks {
-		_, network, _ := net.ParseCIDR(cidr)
-		if network != nil && network.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}

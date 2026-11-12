@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/stanier/stoa/internal/mcpserver"
+	"github.com/stanier/stoa/internal/netguard"
 )
 
 const (
@@ -67,7 +67,7 @@ func NewServer(name, version string, cfg Config) *Server {
 	s.client = &http.Client{
 		Timeout: s.timeout,
 		Transport: &http.Transport{
-			DialContext: s.safeDialContext,
+			DialContext: (&netguard.Dialer{}).DialContext,
 		},
 	}
 
@@ -75,42 +75,6 @@ func NewServer(name, version string, cfg Config) *Server {
 	return s
 }
 
-// safeDialContext blocks requests to localhost and private IPs before connecting.
-// It checks the hostname before DNS resolution (to catch "localhost", "ip6-localhost",
-// etc.) and also checks all resolved IPs (to catch private IP literals and DNS
-// rebinding where the hostname resolves to a private address).
-func (s *Server) safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
-	}
-	// Pre-DNS hostname check: block well-known loopback hostnames.
-	switch strings.ToLower(host) {
-	case "localhost", "ip6-localhost", "ip6-loopback":
-		return nil, fmt.Errorf("access to %q is not allowed", host)
-	}
-	// If the host is already an IP literal, check it directly without DNS.
-	if ip := net.ParseIP(host); ip != nil {
-		if isPrivateIP(ip) {
-			return nil, fmt.Errorf("access to private IP %s is not allowed", ip)
-		}
-		d := &net.Dialer{}
-		return d.DialContext(ctx, network, net.JoinHostPort(host, port))
-	}
-	// Resolve and check every returned address.
-	ips, err := net.DefaultResolver.LookupHost(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	for _, ipStr := range ips {
-		ip := net.ParseIP(ipStr)
-		if ip != nil && isPrivateIP(ip) {
-			return nil, fmt.Errorf("access to private IP %s is not allowed", ip)
-		}
-	}
-	d := &net.Dialer{}
-	return d.DialContext(ctx, network, net.JoinHostPort(ips[0], port))
-}
 
 func (s *Server) ListTools(_ context.Context) ([]mcpserver.Tool, error) {
 	return []mcpserver.Tool{
@@ -266,26 +230,6 @@ func (s *Server) checkURL(rawURL string) error {
 	return nil
 }
 
-// isPrivateIP reports whether ip is in a private or loopback range.
-func isPrivateIP(ip net.IP) bool {
-	privateBlocks := []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"127.0.0.0/8",
-		"169.254.0.0/16",
-		"::1/128",
-		"fc00::/7",
-		"fe80::/10",
-	}
-	for _, cidr := range privateBlocks {
-		_, network, _ := net.ParseCIDR(cidr)
-		if network != nil && network.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
 
 // --- shared helpers ---
 

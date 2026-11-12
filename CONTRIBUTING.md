@@ -30,10 +30,22 @@ The `web/` frontend is embedded into the `webd` binary at build time via `go:emb
 ## Running tests
 
 ```bash
-make test
+make test                    # Go unit tests
+go test -race ./...          # same, with the race detector (needs CGO)
+make lint                    # golangci-lint, config in .golangci.yml
+cd web && npm test           # frontend unit tests
 ```
 
-Tests are pure Go unit tests — no LLM key or running daemon required. The CI workflow runs `make test` and `make build` on every PR against `dev` or `main`, and on every push to either branch.
+Tests are pure Go and Node unit tests — no LLM key or running daemon required. On every PR against `dev` or `main`, and on every push to either branch, CI runs:
+
+- **Test**: `go vet` and `make test`
+- **Race**: `go test -race ./...`
+- **Lint**: golangci-lint, failing only on issues the change introduces (the existing code has a backlog)
+- **Vulnerabilities**: `govulncheck ./...` (non-blocking until the module moves to Go 1.26, which the current golang.org/x/net fixes need)
+- **Web**: `npm test` and `npm audit --audit-level=high`
+- **Build**: `make build`
+
+Dependabot opens weekly update PRs for Go modules, web packages and GitHub Actions against `dev`.
 
 ## Running locally
 
