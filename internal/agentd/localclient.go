@@ -537,13 +537,15 @@ func (l *localConn) serve() {
 		}
 	}()
 
-	// permForwarder: drain global permission channels and forward to the TUI.
-	// Mirrors the WS permForwarder goroutine in handlers.go verbatim.
+	// permForwarder: receive this session's permission events from the router
+	// and forward them to the TUI. Mirrors the WS permForwarder in handlers.go.
 	var permReqChan <-chan *permissions.PermissionRequest
 	var permMentionChan <-chan *permissions.PermissionMention
-	if l.srv.permsSetup != nil {
-		permReqChan = l.srv.permsSetup.RequestChan
-		permMentionChan = l.srv.permsSetup.MentionChan
+	if l.srv.permRouter != nil {
+		sub, unsubscribe := l.srv.permRouter.subscribe(l.sess.id)
+		defer unsubscribe()
+		permReqChan = sub.reqs
+		permMentionChan = sub.mentions
 	}
 
 	go func() {

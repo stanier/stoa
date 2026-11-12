@@ -33,7 +33,7 @@ The `web/` frontend is embedded into the `webd` binary at build time via `go:emb
 make test
 ```
 
-Tests are pure Go unit tests — no LLM key or running daemon required. The CI workflow runs `make test` and `make build` on every PR against `main`.
+Tests are pure Go unit tests — no LLM key or running daemon required. The CI workflow runs `make test` and `make build` on every PR against `dev` or `main`, and on every push to either branch.
 
 ## Running locally
 
@@ -245,13 +245,19 @@ docs/               - Architecture and design documentation
 
 8. **Large MCP tool results.** agentd caps tool results at 50KB (`maxToolResultBytes` in `cmd/agentd/toolpager.go`). Oversized results are paged via an auto-registered `read_tool_result` tool. The correct fix is in the tool itself: return summaries/indexes by default and accept filter/pagination parameters.
 
+## Branches
+
+- `main` is stable. It only changes by merging `dev` into it, and releases are tagged from it (`vX.Y.Z`).
+- `dev` is staging. Feature and fix branches merge here first, so changes can be tested together before they reach `main`. CI keeps the Linux debug binaries from every push to `dev` for 14 days, so you can download and run exactly what was built.
+- When `dev` has been tested, open a pull request from `dev` into `main`, merge it, then tag a release from `main` if one is due.
+
 ## Making a change
 
-1. Fork the repo and create a branch off `main`.
+1. Fork the repo and create a branch off `dev`.
 2. Keep changes focused — one logical change per PR.
 3. Run `make fmt` before pushing (`gofmt` + `goimports`).
 4. Run `make test` and confirm it passes locally.
-5. Open a pull request against `main`. The PR template will prompt for a summary and test plan.
+5. Open a pull request against `dev`. The PR template will prompt for a summary and test plan.
 
 For significant new features or architectural changes, open an issue first to discuss the approach before investing time in an implementation.
 

@@ -60,6 +60,9 @@ type PermissionGrant struct {
 	ServerName  string    `yaml:"server_name,omitempty" json:"server_name,omitempty"`
 	Scope       string    `yaml:"scope" json:"scope"` // "session" or "always"
 	GrantedAt   time.Time `yaml:"granted_at" json:"granted_at"`
+	// SessionID scopes a "session" grant to one agent session. Empty means the
+	// grant applies when no session is in context (single-user TUI).
+	SessionID string `yaml:"-" json:"-"`
 }
 
 // PermissionDecision represents the result of a permission check
@@ -81,6 +84,9 @@ type PermissionRequest struct {
 	Rank         PermissionRank
 	RequestedAt  time.Time
 	ResponseChan chan PermissionResponse
+	// SessionID is the agent session whose tool call raised the request,
+	// taken from the context (see WithSessionID). Empty outside agentd.
+	SessionID string
 }
 
 // PermissionResponse represents user's decision on a permission request
@@ -107,6 +113,23 @@ type PermissionMention struct {
 	ServerName string
 	Message    string
 	Timestamp  time.Time
+	// SessionID is the agent session whose tool call raised the mention.
+	SessionID string
+}
+
+type sessionIDKey struct{}
+
+// WithSessionID returns a context that carries the agent session ID, so that
+// permission requests, mentions and session-scoped grants raised by tool
+// calls under it are attributed to that session.
+func WithSessionID(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, sessionIDKey{}, sessionID)
+}
+
+// SessionIDFromContext returns the session ID set by WithSessionID, or "".
+func SessionIDFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(sessionIDKey{}).(string)
+	return v
 }
 
 // Checker checks if a tool execution is permitted

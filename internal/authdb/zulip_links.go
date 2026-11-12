@@ -2,19 +2,32 @@ package authdb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
-// CreateZulipLink stores or replaces the mapping from a Zulip sender email
-// to an authd user_id. Re-linking overwrites the previous entry.
+// ErrZulipAlreadyLinked is returned by CreateZulipLink when the Zulip address
+// is already linked to a different user.
+var ErrZulipAlreadyLinked = errors.New("authdb: zulip address is already linked to another account")
+
+// CreateZulipLink stores the mapping from a Zulip sender email to an authd
+// user_id. It never re-points an existing link at a different user: that
+// returns ErrZulipAlreadyLinked, and the old link must be removed first
+// (!unlink in Zulip, or auth-admin). Re-linking to the same user refreshes
+// linked_at.
 func (db *DB) CreateZulipLink(ctx context.Context, zulipEmail, userID string) error {
 	const q = `
 		INSERT INTO zulip_links (zulip_email, user_id)
 		VALUES ($1, $2)
 		ON CONFLICT (zulip_email) DO UPDATE
-		  SET user_id=$2, linked_at=now()`
-	if _, err := db.pool.Exec(ctx, q, zulipEmail, userID); err != nil {
+		  SET linked_at=now()
+		  WHERE zulip_links.user_id = EXCLUDED.user_id`
+	tag, err := db.pool.Exec(ctx, q, zulipEmail, userID)
+	if err != nil {
 		return fmt.Errorf("authdb: create zulip link: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrZulipAlreadyLinked
 	}
 	return nil
 }

@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/stanier/stoa/internal/authdclient"
 )
 
 const sessionCookie = "__session"
@@ -134,19 +136,29 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	var result struct {
-		URL string `json:"url"`
+		LoginID string `json:"login_id"`
+		URL     string `json:"url"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || result.URL == "" {
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || result.URL == "" || result.LoginID == "" {
 		http.Error(w, "bad authd response", http.StatusBadGateway)
 		return
 	}
+	secure := len(s.cfg.ExternalURL) >= 8 && s.cfg.ExternalURL[:8] == "https://"
+	authdclient.SetLoginCookie(w, result.LoginID, secure)
 	http.Redirect(w, r, result.URL, http.StatusFound)
 }
 
 func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		http.Error(w, "missing token", http.StatusBadRequest)
+	loginID, code, err := authdclient.CheckLoginCallback(r)
+	if err != nil {
+		http.Error(w, "this login was not started in this browser; please sign in again", http.StatusBadRequest)
+		return
+	}
+	authdclient.ClearLoginCookie(w)
+
+	token, _, err := authdclient.ExchangeLoginCode(r.Context(), s.httpClient, s.cfg.AuthdURL, loginID, code)
+	if err != nil {
+		http.Error(w, "login failed; please sign in again", http.StatusBadRequest)
 		return
 	}
 

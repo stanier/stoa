@@ -37,16 +37,17 @@ See `CONTRIBUTING.md` for the full developer guide: build commands, provider con
 **agentproto `SessionConfig.Source`**: Set to `"web"`, `"tui"`, `"zulip"`, `"slack"`, `"discord"`, `"matrix"`, or `"cli"` when creating sessions. Stored on the session and returned in `SessionInfo`. webd filters the sidebar to `source == "web"`.
 
 **authd HTTP API**:
-- `POST /oauth/login` → `{ "login_id", "url", "expires_in" }` — starts browser login flow
-  - Body may include `"post_login_redirect": "https://..."` (origin must be in `AUTHD_ALLOWED_REDIRECT_ORIGINS`)
-- `GET /oauth/login/poll?id=<login_id>` → `202 {status:pending}` or `200 {session_token}`
+- `POST /oauth/login` → `{ "login_id", "url", "user_code", "expires_in" }` — starts browser login flow
+  - Body may include `"post_login_redirect": "https://..."` (origin must be in `AUTHD_ALLOWED_REDIRECT_ORIGINS`). authd then redirects the browser to it with `?login_id=&code=` (a one-time code, never the token); the app checks login_id against its own cookie and calls `/oauth/login/exchange`
+- `POST /oauth/login/exchange` `{login_id, code}` → `{session_token, llm_key}` — one-time swap for web logins
+- `GET /oauth/login/poll?id=<login_id>` → `202 {status:pending}` or `200 {session_token}` — terminal logins only; the token is released after the user confirms `user_code` in the browser (`POST /oauth/login/confirm`)
 - `POST /token/verify` (Bearer) → `{ user_id, email, name, expires_at }`
 - `POST /token/service` (admin Bearer) → `{ session_token }` — service account token
 - `GET /healthz` → `{"status":"ok"}`
 
 **webd HTTP API**:
 - `GET /auth/login` — starts OIDC browser flow
-- `GET /auth/callback?token=` — receives token from authd, sets HttpOnly cookie
+- `GET /auth/callback?login_id=&code=` — checks login_id against the `__login_id` cookie set by `/auth/login`, exchanges the code with authd, sets HttpOnly cookie
 - `POST /auth/logout` — clears cookie
 - `GET /api/me` — returns user info from authd (validates cookie)
 - `GET|POST /api/sessions[/...]` — proxies to agentd with injected Bearer token
@@ -56,7 +57,7 @@ See `CONTRIBUTING.md` for the full developer guide: build commands, provider con
 
 Auth flow (OIDC via authd, sets session cookie):
 - `GET /auth/login` — starts OIDC browser flow
-- `GET /auth/callback` — receives token from authd, sets HttpOnly cookie
+- `GET /auth/callback?login_id=&code=` — same as webd: checks the `__login_id` cookie, exchanges the code, sets HttpOnly cookie
 - `POST /auth/logout` — clears cookie
 
 Authenticated key management (session cookie required):
