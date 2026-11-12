@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/stanier/stoa/internal/mcpserver"
+	"github.com/stanier/stoa/internal/netguard"
 	"golang.org/x/net/html"
 )
 
@@ -74,7 +74,7 @@ func NewServer(name, version string, cfg Config) *Server {
 	// (timeouts, ALPN, root CAs, etc.) and only override the dial step for
 	// SSRF protection.
 	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.DialContext = s.safeDialContext
+	t.DialContext = (&netguard.Dialer{AllowedHosts: s.allowedHosts}).DialContext
 	s.client = &http.Client{
 		Timeout:   s.timeout,
 		Transport: t,
@@ -85,49 +85,6 @@ func NewServer(name, version string, cfg Config) *Server {
 	return s
 }
 
-// safeDialContext blocks requests to localhost and private IPs before connecting.
-// It checks the hostname before DNS resolution (to catch "localhost", "ip6-localhost",
-// etc.) and also checks all resolved IPs (to catch private IP literals and DNS
-// rebinding where the hostname resolves to a private address).
-// Hosts in s.allowedHosts bypass the private-IP check — use for trusted internal
-// services (e.g. Garage S3) that must be reachable from the container network.
-func (s *Server) safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, err
-	}
-	// Trusted internal hosts bypass the private-IP check entirely.
-	if s.allowedHosts[strings.ToLower(host)] {
-		d := &net.Dialer{}
-		return d.DialContext(ctx, network, net.JoinHostPort(host, port))
-	}
-	// Pre-DNS hostname check: block well-known loopback hostnames.
-	switch strings.ToLower(host) {
-	case "localhost", "ip6-localhost", "ip6-loopback":
-		return nil, fmt.Errorf("access to %q is not allowed", host)
-	}
-	// If the host is already an IP literal, check it directly without DNS.
-	if ip := net.ParseIP(host); ip != nil {
-		if isPrivateIP(ip) {
-			return nil, fmt.Errorf("access to private IP %s is not allowed", ip)
-		}
-		d := &net.Dialer{}
-		return d.DialContext(ctx, network, net.JoinHostPort(host, port))
-	}
-	// Resolve and check every returned address.
-	ips, err := net.DefaultResolver.LookupHost(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	for _, ipStr := range ips {
-		ip := net.ParseIP(ipStr)
-		if ip != nil && isPrivateIP(ip) {
-			return nil, fmt.Errorf("access to private IP %s is not allowed", ip)
-		}
-	}
-	d := &net.Dialer{}
-	return d.DialContext(ctx, network, net.JoinHostPort(ips[0], port))
-}
 
 func (s *Server) ListTools(_ context.Context) ([]mcpserver.Tool, error) {
 	return []mcpserver.Tool{
@@ -299,26 +256,6 @@ func (s *Server) checkURL(rawURL string) error {
 	return nil
 }
 
-// isPrivateIP reports whether ip is in a private or loopback range.
-func isPrivateIP(ip net.IP) bool {
-	privateBlocks := []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"127.0.0.0/8",
-		"169.254.0.0/16",
-		"::1/128",
-		"fc00::/7",
-		"fe80::/10",
-	}
-	for _, cidr := range privateBlocks {
-		_, network, _ := net.ParseCIDR(cidr)
-		if network != nil && network.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
 
 func isHTML(contentType string) bool {
 	return strings.Contains(strings.ToLower(contentType), "text/html")

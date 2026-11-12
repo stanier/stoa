@@ -23,10 +23,10 @@ Before implementing individual servers, identify shared code to extract or repli
 
 ### Shared HTTP Client Pattern
 
-Both `mcp-fetch` and `mcp-http` implement a custom `DialContext` that blocks private IPs (SSRF prevention). All new servers making outbound HTTP calls should replicate this pattern.
+`mcp-fetch`, `mcp-http`, `mcp-acp` and `mcp-graphql` dial through `internal/netguard`, which blocks private, loopback, CGNAT, link-local, multicast and other reserved addresses (SSRF prevention). All new servers making outbound HTTP calls to model-chosen URLs should set `(&netguard.Dialer{}).DialContext` as their transport's `DialContext`.
 
 **Shared concerns across new servers**:
-- Private IP blocking (RFC1918 + loopback + link-local)
+- Private IP blocking (`internal/netguard`: RFC1918, loopback, 0.0.0.0/8, CGNAT, link-local, reserved and IPv6 equivalents, including IPv4-mapped, NAT64 and 6to4 forms)
 - Configurable timeout (default 30s)
 - User-Agent header
 - Response size limits where appropriate

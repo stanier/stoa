@@ -164,10 +164,12 @@ func (s *Server) resolveWorkDir(workDir string) string {
 		return s.workspaceRoot
 	}
 	// Relative path — resolve within workspace.
-	clean := filepath.Clean(filepath.Join(s.workspaceRoot, workDir))
-	// Prevent path traversal above the workspace root.
-	if !strings.HasPrefix(clean, s.workspaceRoot) {
-		return s.workspaceRoot
+	root := filepath.Clean(s.workspaceRoot)
+	clean := filepath.Clean(filepath.Join(root, workDir))
+	// Prevent path traversal above the workspace root. The separator matters:
+	// without it "../workspace2" would pass as a child of "/workspace".
+	if clean != root && !strings.HasPrefix(clean, root+string(filepath.Separator)) {
+		return root
 	}
 	return clean
 }
