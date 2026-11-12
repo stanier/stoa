@@ -20,6 +20,7 @@
     onAccount,
     onApiKeys,
     onAgents,
+    onDecisionGraphs,
     onThemeChange,
     onSelectProject,
     onNewProject,
@@ -1119,6 +1120,7 @@
           <button class="menu-item" onclick={() => { userMenuOpen = false; onAccount?.() }}>Account</button>
           <button class="menu-item" onclick={() => { userMenuOpen = false; onApiKeys?.() }}>API Keys</button>
           <button class="menu-item" onclick={() => { userMenuOpen = false; onAgents?.() }}>Agents</button>
+          <button class="menu-item" onclick={() => { userMenuOpen = false; onDecisionGraphs?.() }}>Decision graphs</button>
           <div class="menu-toggle-row">
             <span>Other sources</span>
             <label class="mini-switch" title="Show sessions from all sources">

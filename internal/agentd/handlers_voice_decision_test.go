@@ -133,6 +133,31 @@ func TestHandleDecisions_Graph(t *testing.T) {
 	}
 }
 
+func TestHandleDecisions_GraphStep(t *testing.T) {
+	s := newCapabilityTestServer(t)
+	d := &recordingDecider{}
+	stubDecider(t, d)
+	graph := `"graph":{"root":"a","nodes":{
+		"a":{"question":{"type":"noul","instructions":"A?"},"edges":{"true":"b"}},
+		"b":{"question":{"type":"noul","instructions":"B?"},"edges":{"true":"c"}},
+		"c":{"question":{"type":"noul","instructions":"C?"}}}}`
+	rec := postDecision(s, `{"provider":"liquid","state":"x","from":"b","max_steps":1,`+graph+`}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code %d: %s", rec.Code, rec.Body)
+	}
+	var resp decisionResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Trace == nil || len(resp.Trace.Steps) != 1 {
+		t.Fatalf("trace = %+v", resp.Trace)
+	}
+	if st := resp.Trace.Steps[0]; st.Node != "b" || st.Next != "c" || st.Stopped != "" {
+		t.Fatalf("step = %+v", st)
+	}
+	if len(d.reqs) != 1 || d.reqs[0].Questions[0].Name != "b" {
+		t.Fatalf("requests = %+v", d.reqs)
+	}
+}
+
 func TestHandleDecisions_Rejects(t *testing.T) {
 	s := newCapabilityTestServer(t)
 	stubDecider(t, &recordingDecider{})
@@ -147,6 +172,9 @@ func TestHandleDecisions_Rejects(t *testing.T) {
 		"bad question":         {`{"provider":"liquid","state":"x","questions":[{"name":"a","type":"poll","instructions":"?"}]}`, 400},
 		"bad graph":            {`{"provider":"liquid","state":"x","graph":{"root":"z","nodes":{"a":{"question":{"type":"noul","instructions":"?"}}}}}`, 400},
 		"bad json":             {`{`, 400},
+		"from without graph":   {`{"provider":"liquid","state":"x","from":"a","questions":[{"name":"a","type":"noul","instructions":"?"}]}`, 400},
+		"unknown from":         {`{"provider":"liquid","state":"x","from":"z","graph":{"root":"a","nodes":{"a":{"question":{"type":"noul","instructions":"?"}}}}}`, 400},
+		"negative max_steps":   {`{"provider":"liquid","state":"x","max_steps":-1,"graph":{"root":"a","nodes":{"a":{"question":{"type":"noul","instructions":"?"}}}}}`, 400},
 	}
 	for name, c := range cases {
 		if rec := postDecision(s, c.body); rec.Code != c.code {

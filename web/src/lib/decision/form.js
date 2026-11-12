@@ -17,7 +17,7 @@ export function blankQuestion(n = 1) {
 
 // "Billing: payments and refunds" → ["billing", "payments and refunds"].
 // Options are one per line, or comma separated when on a single line.
-function splitList(text) {
+export function splitList(text) {
   const t = (text ?? '').trim()
   if (!t) return []
   const parts = t.includes('\n') ? t.split('\n') : t.split(',')
@@ -90,5 +90,30 @@ export function summarize(answer) {
       return pick ? `${pick.label} · ${answer.value?.toFixed?.(2) ?? '–'}` : `${answer.value ?? '–'}`
     default:
       return answer.type ? `${answer.type} answer` : 'answer'
+  }
+}
+
+// The outcomes a question row can resolve to, as { key, label }. Keys match
+// the server's (decision.Question.Outcomes): "true"/"false" for yes/no, the
+// option name for choice, the level index ("0".."n-1") for score. Returns []
+// while the row is incomplete; it never throws.
+export function rowOutcomes(row) {
+  switch (row?.type) {
+    case 'noul':
+      return [{ key: 'true', label: 'yes' }, { key: 'false', label: 'no' }]
+    case 'choice': {
+      const seen = new Set()
+      const out = []
+      for (const o of splitList(row.options)) {
+        const idx = o.indexOf(':')
+        const key = (idx > 0 ? o.slice(0, idx) : o).trim()
+        if (key && !seen.has(key)) { seen.add(key); out.push({ key, label: key }) }
+      }
+      return out
+    }
+    case 'score':
+      return splitList(row.levels).slice(0, 10).map((label, i) => ({ key: String(i), label }))
+    default:
+      return []
   }
 }

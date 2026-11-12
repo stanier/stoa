@@ -116,3 +116,53 @@ func TestGraphValidate(t *testing.T) {
 		t.Fatalf("valid graph rejected: %v", err)
 	}
 }
+
+func TestGraphWalkFrom_StepsOneNodeAtATime(t *testing.T) {
+	g := triageGraph()
+	d := &fakeDecider{picks: map[string]string{"urgent": "true", "team": "technical", "severity": "0"}}
+	ctx := context.Background()
+
+	tr, err := g.WalkFrom(ctx, d, "d1", []byte(`"crash"`), nil, "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tr.Steps) != 1 || tr.Steps[0].Node != "urgent" || tr.Steps[0].Next != "team" || tr.Steps[0].Stopped != "" {
+		t.Fatalf("first step = %+v", tr.Steps)
+	}
+
+	// A person overrode the pick and jumped straight to severity.
+	tr, err = g.WalkFrom(ctx, d, "d1", []byte(`"crash"`), nil, "severity", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tr.Steps) != 1 || tr.Steps[0].Node != "severity" || tr.Steps[0].Stopped != "leaf" {
+		t.Fatalf("override step = %+v", tr.Steps)
+	}
+	if got := fmt.Sprint(d.calls); got != "[urgent severity]" {
+		t.Errorf("calls = %s", got)
+	}
+}
+
+func TestGraphWalkFrom_RunsToEndFromMiddle(t *testing.T) {
+	d := &fakeDecider{picks: map[string]string{"team": "technical", "severity": "1"}}
+	tr, err := triageGraph().WalkFrom(context.Background(), d, "d1", []byte(`"x"`), nil, "team", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tr.Steps) != 2 || tr.Steps[1].Stopped != "leaf" {
+		t.Fatalf("trace = %+v", tr.Steps)
+	}
+}
+
+func TestGraphWalkFrom_RejectsBadStart(t *testing.T) {
+	d := &fakeDecider{}
+	if _, err := triageGraph().WalkFrom(context.Background(), d, "d1", []byte(`"x"`), nil, "ghost", 1); err == nil {
+		t.Error("unknown start node: expected an error")
+	}
+	if _, err := triageGraph().WalkFrom(context.Background(), d, "d1", []byte(`"x"`), nil, "", -1); err == nil {
+		t.Error("negative max steps: expected an error")
+	}
+	if len(d.calls) != 0 {
+		t.Errorf("model was called: %v", d.calls)
+	}
+}

@@ -77,3 +77,94 @@ test('summarize answers', () => {
   assert.equal(summarize({ type: 'box' }), 'box answer')
   assert.equal(slug('  Hello, World! '), 'hello_world')
 })
+
+// ── Decision graphs ──────────────────────────────────────────────────────────
+import { rowOutcomes } from './decision/form.js'
+import {
+  exampleGraph, blankGraph, blankNode, removeNode, findCycle, toApiGraph, layout,
+  newRun, applyTrace, overrideLast, stepOutcome, loadGraphs, saveGraphs, STORAGE_KEY,
+} from './decision/graph.js'
+
+test('rowOutcomes uses the server outcome keys', () => {
+  assert.deepEqual(rowOutcomes({ type: 'noul' }).map(o => o.key), ['true', 'false'])
+  assert.deepEqual(rowOutcomes({ type: 'choice', options: 'a: first, b, a' }).map(o => o.key), ['a', 'b'])
+  assert.deepEqual(rowOutcomes({ type: 'score', levels: 'low\nhigh' }), [{ key: '0', label: 'low' }, { key: '1', label: 'high' }])
+  assert.deepEqual(rowOutcomes({ type: 'choice', options: '' }), [])
+})
+
+test('toApiGraph names questions by node and keeps only live edges', () => {
+  const g = exampleGraph()
+  g.nodes[0].edges.false = 'gone'            // missing node
+  g.nodes[1].edges.marketing = 'n3'          // not an option
+  const api = toApiGraph(g)
+  assert.equal(api.root, 'n1')
+  assert.deepEqual(Object.keys(api.nodes), ['n1', 'n2', 'n3'])
+  assert.equal(api.nodes.n1.question.name, 'n1')
+  assert.deepEqual(api.nodes.n1.edges, { true: 'n2' })
+  assert.deepEqual(api.nodes.n2.edges, { technical: 'n3' })
+  assert.equal(api.nodes.n2.min_confidence, 0.6)
+  assert.equal(api.nodes.n3.edges, undefined)
+  assert.deepEqual(api.nodes.n3.question.criteria, ['barely', 'some features', 'cannot work'])
+})
+
+test('toApiGraph explains what is wrong', () => {
+  const g = blankGraph()
+  assert.throws(() => toApiGraph(g), /Step 1 needs its question text/)
+  const loop = exampleGraph()
+  loop.nodes[2].edges = { 0: 'n1' }
+  assert.equal(findCycle(loop), 'n1')
+  assert.throws(() => toApiGraph(loop), /loops back/)
+  const bad = exampleGraph()
+  bad.nodes[0].minConfidence = '150'
+  assert.throws(() => toApiGraph(bad), /0 to 100/)
+  assert.throws(() => toApiGraph({ ...exampleGraph(), root: 'x' }), /starting step/)
+})
+
+test('removeNode drops edges into it and moves the root', () => {
+  const g = removeNode(exampleGraph(), 'n1')
+  assert.equal(g.root, 'n2')
+  const h = removeNode(exampleGraph(), 'n2')
+  assert.deepEqual(h.nodes[0].edges, {})
+  const added = blankNode(h)
+  assert.ok(!h.nodes.some(n => n.id === added.id))
+})
+
+test('layout puts each node in its longest-path column', () => {
+  const g = exampleGraph()
+  g.nodes[0].edges.false = 'n3'  // n3 reachable at depth 1 and 2
+  g.nodes.push({ ...blankNode(g), id: 'n9' })
+  const { cols, unreachable } = layout(g)
+  assert.deepEqual(cols, [['n1'], ['n2'], ['n3'], ['n9']])
+  assert.deepEqual(unreachable, ['n9'])
+})
+
+test('a run follows steps, pauses, and takes a person\'s branch', () => {
+  const g = exampleGraph()
+  let run = newRun(g)
+  assert.equal(run.current, 'n1')
+  run = applyTrace(run, [{ node: 'n1', answer: { pick: 'true' }, next: 'n2' }])
+  assert.equal(run.current, 'n2')
+  assert.equal(run.done, null)
+  run = applyTrace(run, [{ node: 'n2', answer: { pick: 'billing' }, stopped: 'low_confidence' }])
+  assert.equal(run.current, null)
+  assert.equal(run.done, 'low_confidence')
+  run = overrideLast(run, g, 'technical')
+  assert.equal(run.current, 'n3')
+  assert.equal(run.steps[1].by, 'you')
+  assert.equal(stepOutcome(run.steps[1]), 'technical')
+  run = overrideLast(run, g, 'sales')  // no edge: the run ends there
+  assert.equal(run.current, null)
+  assert.equal(run.done, 'leaf')
+})
+
+test('graphs save to and load from storage, and bad data is ignored', () => {
+  const mem = new Map()
+  const storage = { getItem: k => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v) }
+  assert.deepEqual(loadGraphs(storage), [])
+  const g = exampleGraph()
+  assert.ok(saveGraphs(storage, [g]))
+  assert.equal(loadGraphs(storage)[0].name, 'Support ticket triage')
+  mem.set(STORAGE_KEY, '{nope')
+  assert.deepEqual(loadGraphs(storage), [])
+  assert.equal(saveGraphs({ setItem() { throw new Error('full') } }, [g]), false)
+})

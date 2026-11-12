@@ -7,6 +7,7 @@
   import ApiKeys from './lib/ApiKeys.svelte'
   import AgentRegistry from './lib/AgentRegistry.svelte'
   import ProjectView from './lib/ProjectView.svelte'
+  import DecisionGraphs from './lib/DecisionGraphs.svelte'
 
   // ── Existing state ──────────────────────────────────────────────────────────
   let user      = $state(null)
@@ -21,7 +22,7 @@
   let toolsOpen    = $state(false)
 
   // ── View routing (replaces activePanel) ─────────────────────────────────────
-  // 'chat' | 'project' | 'account' | 'apikeys' | 'agents'
+  // 'chat' | 'project' | 'account' | 'apikeys' | 'agents' | 'decisions'
   let view = $state('chat')
 
   // ── Project state ───────────────────────────────────────────────────────────
@@ -418,6 +419,7 @@
       onAccount={() => view = 'account'}
       onApiKeys={() => view = 'apikeys'}
       onAgents={() => view = 'agents'}
+      onDecisionGraphs={() => view = 'decisions'}
       onThemeChange={applyTheme}
       onSelectProject={selectProject}
       onNewProject={createProject}
@@ -433,6 +435,8 @@
         onBack={() => view = 'chat'}
         onOpenChat={(sessionId) => { view = 'chat'; activeId = sessionId; loadSessions() }}
       />
+    {:else if view === 'decisions'}
+      <DecisionGraphs onBack={() => view = 'chat'} />
     {:else if view === 'project' && activeProjectId}
       {@const activeProject = projects.find(p => p.id === activeProjectId)}
       {#if activeProject}

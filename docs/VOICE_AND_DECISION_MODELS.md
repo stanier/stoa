@@ -113,15 +113,31 @@ confidence, and a probability bar per outcome.
 - **API:** `POST /decisions` (agentd) or `/api/decisions` (webd) with
   `{provider, model, state, images?, questions: [{name, type, instructions, criteria}]}`.
 
-### Decision graphs (seam for later)
+### Decision graphs
 
-`decision.Graph` is a small acyclic tree: each node asks one question, and the
-answer's outcome picks the edge to the next node. `Walk` runs it to a leaf;
-`Step` runs one node so a caller can pause, show the user, or override a pick.
-A node's `min_confidence` stops the walk there for a person to decide.
-`POST /decisions` takes a `graph` in place of `questions` and returns the
-trace. There is no UI for graphs yet; this is where interactive trees and
-controllable auto-logic would build on.
+`decision.Graph` is a small acyclic graph: each node asks one question, and
+the answer's outcome picks the edge to the next node (yes/no keys are
+`true`/`false`, choice keys are option names, score keys are level indexes
+`"0"`..). A node with no edge for the outcome ends the walk. A node's
+`min_confidence` stops the walk there so a person can decide.
+
+- **API:** `POST /decisions` takes a `graph` (`{root, nodes: {id: {question,
+  edges?, min_confidence?}}}`) in place of `questions` and returns a `trace`
+  of steps (`node`, `answer`, `next`, `stopped`). Optional `from` (start node,
+  default the root) and `max_steps` (default 0, meaning until the walk ends)
+  let a client step one node at a time, or carry on from a node a person
+  picked. In Go this is `Graph.WalkFrom`; `Walk` runs from the root to the end.
+- **UI:** user menu → **Decision graphs**. Build steps (question, type,
+  options), point each outcome at another step or "end here", and set an
+  optional "pause for me below N% confidence". A map draws the graph and
+  highlights the path taken. Pick a decision model, describe a situation, then
+  **Step** or **Run to the end**. The path lists each answer with its
+  probabilities; when the model is unsure the run pauses and you pick the
+  branch, and you can take a different branch at the latest step any time.
+- **Stubbed:** graphs are saved in the browser (localStorage), not on the
+  server, so they don't follow you across browsers. No loops, no images in
+  the state, no export/import, and no "auto" rules beyond the confidence floor
+  yet.
 
 Liquid documents no chaining API; trees are always client-side calls.
 

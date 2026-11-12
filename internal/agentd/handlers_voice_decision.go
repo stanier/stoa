@@ -34,6 +34,11 @@ type decisionRequest struct {
 	Images    []string            `json:"images,omitempty"`
 	Questions []decision.Question `json:"questions,omitempty"`
 	Graph     *decision.Graph     `json:"graph,omitempty"`
+	// From and MaxSteps let a client step through a graph: start at node
+	// From (the root when empty) and stop after MaxSteps nodes (0 = until
+	// the walk ends). Only valid with graph.
+	From     string `json:"from,omitempty"`
+	MaxSteps int    `json:"max_steps,omitempty"`
 }
 
 type decisionResponse struct {
@@ -82,6 +87,14 @@ func (s *Server) handleDecisions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "send either questions or graph", http.StatusBadRequest)
 		return
 	}
+	if req.Graph == nil && (req.From != "" || req.MaxSteps != 0) {
+		http.Error(w, "from and max_steps need a graph", http.StatusBadRequest)
+		return
+	}
+	if req.MaxSteps < 0 || req.MaxSteps > decision.MaxGraphNodes {
+		http.Error(w, "max_steps out of range", http.StatusBadRequest)
+		return
+	}
 	pc, model, code, msg := s.resolveCapableModel(req.Provider, req.Model, config.CapabilityDecision)
 	if code != 0 {
 		http.Error(w, msg, code)
@@ -103,7 +116,13 @@ func (s *Server) handleDecisions(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		tr, err := req.Graph.Walk(ctx, d, model, req.State, req.Images)
+		if req.From != "" {
+			if _, ok := req.Graph.Nodes[req.From]; !ok {
+				http.Error(w, "from is not a node of the graph", http.StatusBadRequest)
+				return
+			}
+		}
+		tr, err := req.Graph.WalkFrom(ctx, d, model, req.State, req.Images, req.From, req.MaxSteps)
 		if err != nil {
 			writeDecisionError(w, err, tr)
 			return
