@@ -4,7 +4,7 @@ Thanks for your interest in contributing. This document covers how to get set up
 
 ## Prerequisites
 
-- Go 1.22+ (version pinned in `go.mod`)
+- Go 1.26+ (version pinned in `go.mod`)
 - Node.js 20+ (for the Svelte web frontend in `web/`)
 - Make
 - An LLM API key (Anthropic or OpenAI) if you want to test end-to-end
@@ -41,7 +41,7 @@ Tests are pure Go and Node unit tests — no LLM key or running daemon required.
 - **Test**: `go vet` and `make test`
 - **Race**: `go test -race ./...`
 - **Lint**: golangci-lint, failing only on issues the change introduces (the existing code has a backlog)
-- **Vulnerabilities**: `govulncheck ./...` (non-blocking until the module moves to Go 1.26, which the current golang.org/x/net fixes need)
+- **Vulnerabilities**: `govulncheck ./...`, blocking: a reachable finding fails the check
 - **Web**: `npm test` and `npm audit --audit-level=high`
 - **Build**: `make build`
 

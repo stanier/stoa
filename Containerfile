@@ -15,7 +15,9 @@ RUN npx vite build --outDir /dist
 # =============================================================================
 # Stage 1: Build environment
 # =============================================================================
-FROM golang:1.26-alpine3.22 AS builder
+# Patch version matches the go directive in go.mod: the official image sets
+# GOTOOLCHAIN=local, so an older 1.26.x image would refuse to build.
+FROM golang:1.26.11-alpine3.24 AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates

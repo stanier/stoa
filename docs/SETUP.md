@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Go 1.22+
+- Go 1.26+
 - An LLM API key (Anthropic or OpenAI-compatible)
 - Podman + podman-compose (for containerized mode only)
 
