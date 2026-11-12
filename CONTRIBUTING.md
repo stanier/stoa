@@ -41,7 +41,7 @@ Tests are pure Go and Node unit tests — no LLM key or running daemon required.
 - **Test**: `go vet` and `make test`
 - **Race**: `go test -race ./...`
 - **Lint**: golangci-lint, failing only on issues the change introduces (the existing code has a backlog)
-- **Vulnerabilities**: `govulncheck ./...`
+- **Vulnerabilities**: `govulncheck ./...` (non-blocking until the module moves to Go 1.26, which the current golang.org/x/net fixes need)
 - **Web**: `npm test` and `npm audit --audit-level=high`
 - **Build**: `make build`
 

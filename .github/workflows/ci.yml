@@ -68,6 +68,10 @@ jobs:
   vulncheck:
     name: Vulnerabilities
     runs-on: ubuntu-latest
+    # Non-blocking for now: the golang.org/x/net fixes for the findings this
+    # reports (v0.60.0+) need Go 1.26, and go.mod is on Go 1.25. Make this
+    # blocking again once the module moves to Go 1.26.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
 
