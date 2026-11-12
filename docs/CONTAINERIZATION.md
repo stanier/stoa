@@ -485,7 +485,7 @@ network_mode: bridge  # Change to 'host' if needed
 
 4. **Multi-stage builds**: Reduce image size
    ```dockerfile
-   FROM golang:1.22 AS builder
+   FROM golang:1.26 AS builder
    # ... build steps
    FROM alpine:latest
    COPY --from=builder /app/binary .
