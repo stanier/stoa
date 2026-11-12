@@ -59,13 +59,12 @@ func (c *TokensCommand) Execute(ctx context.Context, args []string, state *skill
 		}, nil
 	}
 
-	tokenCounter, err := compaction.NewTikTokenCounter(func() string { if dp := state.Config.LLM.DefaultProvider(); dp != nil { return dp.Model }; return "" }())
-	if err != nil {
-		return skills.CommandResult{
-			Success: false,
-			Message: fmt.Sprintf("Failed to create token counter: %v", err),
-		}, nil
+	// Falls back to a character estimate when tiktoken can't load its encoding.
+	model := ""
+	if dp := state.Config.LLM.DefaultProvider(); dp != nil {
+		model = dp.Model
 	}
+	tokenCounter := compaction.NewBestEffortCounter(model)
 
 	// Check if --by-role flag is provided
 	byRole := false
