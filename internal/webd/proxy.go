@@ -49,6 +49,11 @@ func (s *Server) handleWSProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	wsCfg.Header = http.Header{}
 	wsCfg.Header.Set("Authorization", "Bearer "+token)
+	// agentd doesn't store the per-user LLM key; send it on every connect so a
+	// session restored after an agentd restart gets it back.
+	if llmKey := s.llmKeyFromCookie(r); llmKey != "" {
+		wsCfg.Header.Set(agentproto.LLMKeyHeader, llmKey)
+	}
 
 	agentConn, err := xws.DialConfig(wsCfg)
 	if err != nil {

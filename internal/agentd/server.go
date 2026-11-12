@@ -2,7 +2,6 @@ package agentd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -286,7 +285,7 @@ func NewServer(cfg *config.Config) (*Server, error) {
 
 				for _, sess := range sessions {
 					sess.mu.Lock()
-					sess.llmCtx = app.BuildLLMContext(cfg, skillRegistry, promptReg, personaReg, sess.persona, sess.allowedTools, s.agentSkills...)
+					sess.llmCtx = s.sessionLLMContext(context.Background(), sess.persona, sess.allowedTools)
 					sess.mu.Unlock()
 				}
 			},
@@ -330,28 +329,7 @@ func (s *Server) loadPersistedSessions() {
 
 	count := 0
 	for _, ps := range persisted {
-		sess := newSession(ps.ID, ps.Persona, ps.Source, "", "", nil)
-		sess.createdAt = ps.CreatedAt
-		sess.lastInputTokens = ps.LastInputTokens
-		sess.totalOutputTokens = ps.TotalOutputTokens
-		sess.tracer = app.SetupTracer(s.cfg, ps.ID)
-
-		// Rebuild a fresh system prompt from current config/tools.
-		sess.llmCtx = app.BuildLLMContext(
-			s.cfg,
-			s.skillRegistry,
-			s.promptReg,
-			s.personaReg,
-			ps.Persona,
-			nil,
-			s.agentSkills...,
-		)
-
-		// Prepend fresh system message, then restore conversation history.
-		if sess.llmCtx.SystemPrompt != "" {
-			sess.messages = append(sess.messages, systemMessage(sess.llmCtx.SystemPrompt))
-		}
-		sess.messages = append(sess.messages, ps.Messages...)
+		sess := s.rebuildSession(context.Background(), storedFromFile(ps))
 
 		s.mu.Lock()
 		s.sessions[ps.ID] = sess
@@ -428,26 +406,7 @@ func (s *Server) loadSessionsFromDB() {
 			continue
 		}
 
-		sess := newSession(ds.ID, ds.Persona, ds.Source, ds.UserID, "", nil)
-		sess.createdAt = ds.CreatedAt
-		sess.lastInputTokens = ds.LastInputTokens
-		sess.totalOutputTokens = ds.TotalOutputTokens
-		sess.title = ds.Title
-		sess.tracer = app.SetupTracer(s.cfg, ds.ID)
-		sess.llmCtx = app.BuildLLMContext(s.cfg, s.skillRegistry, s.promptReg, s.personaReg, ds.Persona, nil, s.agentSkills...)
-		if len(ds.Overrides) > 0 && string(ds.Overrides) != "{}" {
-			var o llm.Overrides
-			if err := json.Unmarshal(ds.Overrides, &o); err == nil {
-				sess.overrides = &o
-			}
-		}
-
-		if sess.llmCtx.SystemPrompt != "" {
-			sess.messages = append(sess.messages, systemMessage(sess.llmCtx.SystemPrompt))
-		}
-		sess.messages = append(sess.messages, msgs...)
-		// All loaded messages are already persisted.
-		sess.persistedMsgCount = nonSystemCount(sess.messages)
+		sess := s.rebuildSession(context.Background(), storedFromDB(&ds, msgs))
 
 		s.mu.Lock()
 		s.sessions[ds.ID] = sess
@@ -477,25 +436,7 @@ func (s *Server) loadSessionFromDB(ctx context.Context, sessionID string) (*Sess
 		return nil, err
 	}
 
-	sess := newSession(ds.ID, ds.Persona, ds.Source, ds.UserID, "", nil)
-	sess.createdAt = ds.CreatedAt
-	sess.lastInputTokens = ds.LastInputTokens
-	sess.totalOutputTokens = ds.TotalOutputTokens
-	sess.title = ds.Title
-	sess.tracer = app.SetupTracer(s.cfg, ds.ID)
-	sess.llmCtx = app.BuildLLMContext(s.cfg, s.skillRegistry, s.promptReg, s.personaReg, ds.Persona, nil, s.agentSkills...)
-	if len(ds.Overrides) > 0 && string(ds.Overrides) != "{}" {
-		var o llm.Overrides
-		if err := json.Unmarshal(ds.Overrides, &o); err == nil {
-			sess.overrides = &o
-		}
-	}
-
-	if sess.llmCtx.SystemPrompt != "" {
-		sess.messages = append(sess.messages, systemMessage(sess.llmCtx.SystemPrompt))
-	}
-	sess.messages = append(sess.messages, msgs...)
-	sess.persistedMsgCount = nonSystemCount(sess.messages)
+	sess := s.rebuildSession(ctx, storedFromDB(ds, msgs))
 
 	// Write lock: a concurrent goroutine may have already recovered the same
 	// session. Prefer the existing entry to avoid duplicating state.

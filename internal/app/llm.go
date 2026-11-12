@@ -86,6 +86,23 @@ func BuildLLMContext(
 	additionalFilter []string,
 	agentSkillsMeta ...*agentskills.SkillMetadata,
 ) LLMContext {
+	return BuildLLMContextFiltered(cfg, registry, promptRegistry, personaRegistry,
+		personaName, [][]string{additionalFilter}, agentSkillsMeta...)
+}
+
+// BuildLLMContextFiltered is BuildLLMContext with several additional filters.
+// A tool must match every non-empty filter, so each filter can only narrow the
+// set (e.g. a published agent's allowed tools, then a session's allowed tools).
+// An empty or nil filter places no restriction.
+func BuildLLMContextFiltered(
+	cfg *config.Config,
+	registry *skills.Registry,
+	promptRegistry *prompts.Registry,
+	personaRegistry *personas.Registry,
+	personaName string,
+	additionalFilters [][]string,
+	agentSkillsMeta ...*agentskills.SkillMetadata,
+) LLMContext {
 	model := ""
 	provider := ""
 	if cfg != nil {
@@ -101,9 +118,11 @@ func BuildLLMContext(
 	// Step 2: filter the registry to the allowed subset.
 	filteredSkillTools := FilterSkillTools(listTools(registry), allowedPatterns)
 
-	// Apply any additional caller-supplied filter (e.g. role-based AllowedTools).
-	if len(additionalFilter) > 0 {
-		filteredSkillTools = FilterSkillTools(filteredSkillTools, additionalFilter)
+	// Apply any additional caller-supplied filters (e.g. role-based AllowedTools).
+	for _, f := range additionalFilters {
+		if len(f) > 0 {
+			filteredSkillTools = FilterSkillTools(filteredSkillTools, f)
+		}
 	}
 
 	commands := listCommands(registry)

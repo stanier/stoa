@@ -50,24 +50,10 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	sess.toolsLocked = len(req.AllowedTools) > 0 && IsServiceFromContext(r.Context())
 	sess.tracer = app.SetupTracer(s.cfg, sessionID)
 
-	// Build the initial LLM context (system prompt + tools).
-	sess.llmCtx = app.BuildLLMContext(
-		s.cfg,
-		s.skillRegistry,
-		s.promptReg,
-		s.personaReg,
-		req.Persona,
-		req.AllowedTools,
-		s.agentSkills...,
-	)
-
-	// DB agent overlay: if the persona matches a published agent in the registry,
-	// use its system_prompt and allowed_tools instead of the default persona resolution.
-	if s.agentDB != nil && req.Persona != "" {
-		if dbAgent, err := s.agentDB.GetAgent(r.Context(), req.Persona); err == nil && dbAgent.PublishedAt != nil {
-			sess.llmCtx = buildLLMContextFromDBAgent(s, dbAgent)
-		}
-	}
+	// Build the initial LLM context (system prompt + tools). A persona that
+	// names a published agent in the registry uses that agent's tools, still
+	// narrowed by the session's allowed_tools.
+	sess.llmCtx = s.sessionLLMContext(r.Context(), req.Persona, req.AllowedTools)
 
 	// Register list_tools as a per-session tool so the LLM can discover
 	// available tools on demand rather than receiving the full list up front.
@@ -84,7 +70,8 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 
 	// Persist to DB if configured.
 	if s.agentDB != nil {
-		if err := s.agentDB.CreateSession(r.Context(), sessionID, req.UserID, req.Persona, req.Source); err != nil {
+		if err := s.agentDB.CreateSession(r.Context(), sessionID, req.UserID, req.Persona, req.Source,
+			agentdb.ToolLimits{AllowedTools: req.AllowedTools, Locked: sess.toolsLocked}); err != nil {
 			logging.Warnf("agentd: db: create session %s: %v", sessionID, err)
 		}
 	}
@@ -552,10 +539,31 @@ func (s *Server) handleRestoreMessages(w http.ResponseWriter, r *http.Request, s
 // It uses golang.org/x/net/websocket which is already a project dependency.
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, sess *Session) {
 	token := bearerToken(r)
+	s.reattachLLMKey(r, sess)
 	wsHandler := websocket.Handler(func(ws *websocket.Conn) {
 		s.serveWebSocket(ws, sess, token)
 	})
 	wsHandler.ServeHTTP(w, r)
+}
+
+// reattachLLMKey takes the per-user LLM key that webd sends on each connect
+// and attaches it to the session. The key is never stored, so this is how a
+// session gets it back after an agentd restart. Only the session's owner may
+// set it, so nobody can attach their key (and quota) to someone else's chat.
+func (s *Server) reattachLLMKey(r *http.Request, sess *Session) {
+	key := r.Header.Get(agentproto.LLMKeyHeader)
+	if key == "" {
+		return
+	}
+	callerID, ok := UserIDFromContext(r.Context())
+	if !ok || callerID == "" || IsServiceFromContext(r.Context()) {
+		return
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.userID == callerID {
+		sess.llmKey = key
+	}
 }
 
 // wsWriter wraps a websocket.Conn with a mutex so concurrent goroutines can
@@ -1096,14 +1104,23 @@ func (s *Server) handleSessionTools(w http.ResponseWriter, r *http.Request, sess
 
 		sess.mu.Lock()
 		sess.allowedTools = patch.AllowedTools
-		sess.llmCtx = app.BuildLLMContext(
-			s.cfg, s.skillRegistry, s.promptReg, s.personaReg,
-			sess.persona, sess.allowedTools,
-			s.agentSkills...,
-		)
+		sess.llmCtx = s.sessionLLMContext(r.Context(), sess.persona, sess.allowedTools)
 		// Refresh the per-session list_tools reference so it sees the new context.
 		sess.perSessionTools["list_tools"] = newListToolsTool(&sess.mu, &sess.llmCtx)
+		limits := agentdb.ToolLimits{AllowedTools: sess.allowedTools, Locked: sess.toolsLocked}
 		sess.mu.Unlock()
+
+		// Store the new limits so they survive a restart.
+		if s.agentDB != nil {
+			if err := s.agentDB.UpdateToolLimits(r.Context(), sess.id, limits); err != nil {
+				logging.Warnf("agentd: db: update tool limits for %s: %v", sess.id, err)
+			}
+		}
+		if s.cfg != nil && s.cfg.Agentd.SessionDir != "" {
+			if err := saveSession(s.cfg.Agentd.SessionDir, sess); err != nil {
+				logging.Warnf("agentd: persist session %s: %v", sess.id, err)
+			}
+		}
 
 		w.WriteHeader(http.StatusNoContent)
 
