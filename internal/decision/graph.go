@@ -152,12 +152,34 @@ func (g *Graph) Step(ctx context.Context, d Decider, model string, state []byte,
 // Walk runs the graph from its root until a leaf or a low-confidence stop.
 // Validate first; Walk also guards against runaway walks.
 func (g *Graph) Walk(ctx context.Context, d Decider, model string, state []byte, images []string) (*Trace, error) {
+	return g.WalkFrom(ctx, d, model, state, images, "", 0)
+}
+
+// WalkFrom runs the graph from node from (the root when empty) for at most
+// maxSteps nodes (0 means until the walk ends). A caller stepping through a
+// graph one node at a time passes maxSteps 1 and the previous step's Next;
+// when a person overrides a pick, it passes the node they chose instead.
+// When maxSteps runs out, the last step's Next is set and Stopped is empty.
+func (g *Graph) WalkFrom(ctx context.Context, d Decider, model string, state []byte, images []string, from string, maxSteps int) (*Trace, error) {
 	if err := g.Validate(); err != nil {
 		return nil, err
 	}
+	if from == "" {
+		from = g.Root
+	}
+	if _, ok := g.Nodes[from]; !ok {
+		return nil, fmt.Errorf("decision: start node %q is not a node", from)
+	}
+	if maxSteps < 0 {
+		return nil, errors.New("decision: max steps must not be negative")
+	}
+	limit := len(g.Nodes)
+	if maxSteps > 0 && maxSteps < limit {
+		limit = maxSteps
+	}
 	tr := &Trace{}
-	id := g.Root
-	for i := 0; i < len(g.Nodes); i++ {
+	id := from
+	for i := 0; i < limit; i++ {
 		step, usage, err := g.Step(ctx, d, model, state, images, id)
 		if usage != nil {
 			tr.Usage.InputTokens += usage.InputTokens
@@ -171,6 +193,9 @@ func (g *Graph) Walk(ctx context.Context, d Decider, model string, state []byte,
 			return tr, nil
 		}
 		id = step.Next
+	}
+	if maxSteps > 0 && limit == maxSteps {
+		return tr, nil // paused; the caller goes on from the last step's Next
 	}
 	return tr, errors.New("decision: walk exceeded graph size")
 }

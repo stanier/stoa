@@ -79,3 +79,39 @@ func TestRealtimeProxy(t *testing.T) {
 		t.Errorf("agentd query = %q (extra params must be dropped)", gotQuery)
 	}
 }
+
+func TestDecisionGraphsProxy(t *testing.T) {
+	var gotPath, gotAuth string
+	agentd := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"dg_1"}`))
+	}))
+	defer agentd.Close()
+	s, err := NewServer(&Config{AgentdURL: agentd.URL, ExternalURL: "https://stoa.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := httptest.NewServer(s.Router())
+	defer web.Close()
+
+	resp, err := http.Get(web.URL + "/api/decision-graphs/dg_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized || gotPath != "" {
+		t.Fatalf("unauthenticated: code %d, agentd path %q", resp.StatusCode, gotPath)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, web.URL+"/api/decision-graphs/dg_1", nil)
+	req.Header.Set("Cookie", sessionCookie+"=tok123")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || gotPath != "/decision-graphs/dg_1" || gotAuth != "Bearer tok123" {
+		t.Fatalf("code %d, agentd path %q auth %q", resp.StatusCode, gotPath, gotAuth)
+	}
+}

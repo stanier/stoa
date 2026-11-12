@@ -17,7 +17,7 @@ var migrationsFS embed.FS
 
 // RequiredSchemaVersion is the goose migration version this binary expects.
 // Bump this constant each time a new migration file is added.
-const RequiredSchemaVersion = 10
+const RequiredSchemaVersion = 14
 
 // DB wraps a pgxpool.Pool with typed methods for the agentd schema.
 type DB struct {

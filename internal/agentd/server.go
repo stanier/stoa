@@ -378,6 +378,8 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/tools", s.handleListTools)
 	mux.HandleFunc("/models", s.handleGetModels)
 	mux.HandleFunc("/decisions", s.handleDecisions)
+	mux.HandleFunc("/decision-graphs", s.handleDecisionGraphs)
+	mux.HandleFunc("/decision-graphs/", s.handleDecisionGraphByID)
 	mux.HandleFunc("/realtime", s.handleRealtime)
 	mux.Handle("/metrics", s.metricsHandler)
 

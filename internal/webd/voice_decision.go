@@ -21,6 +21,14 @@ func (s *Server) handleDecisionsProxy(w http.ResponseWriter, r *http.Request) {
 	s.proxyToAgentd(w, r, s.cfg.AgentdURL+"/decisions", token)
 }
 
+// handleDecisionGraphsProxy proxies /api/decision-graphs[/:id] → agentd
+// /decision-graphs[/:id] (saved graphs; agentd checks ownership).
+func (s *Server) handleDecisionGraphsProxy(w http.ResponseWriter, r *http.Request) {
+	token := s.tokenFromCookie(r)
+	tail := strings.TrimPrefix(r.URL.Path, "/api/decision-graphs")
+	s.proxyToAgentd(w, r, s.cfg.AgentdURL+"/decision-graphs"+tail, token)
+}
+
 // handleRealtimeProxy upgrades GET /api/realtime?provider=&model=[&instructions=]
 // to a WebSocket and relays frames to agentd's /realtime, injecting the
 // session Bearer token. Only those query parameters are forwarded.
