@@ -121,6 +121,8 @@ func authdMiddlewareWithAPIKeyd(ac *authdclient.Client, akc *apikeydclient.Clien
 // isExempt reports whether the request path bypasses authentication.
 // /auth/* endpoints are exempt so clients can initiate flows.
 // /healthz and /acp/ping are always open.
+// /metrics is open so Prometheus can scrape without a token; it must only be
+// reachable on the internal network (config/nginx.conf does not route it).
 func isExempt(path string) bool {
 	return strings.HasPrefix(path, "/auth/") || path == "/healthz" || path == "/acp/ping" || path == "/metrics"
 }
